@@ -154,6 +154,13 @@ type AppCommands = {
 const api = createClient<AppCommands>()
 ```
 
+Command keys in `AppCommands` are written **snake_case**, matching the literal Rust command
+name Tauri puts on the wire (`invoke('has_error')`). Call sites are **camelCase**
+(`api.hasError()`), matching `#[tauri::command]`'s own default renaming and the accessor names
+`tauri-specta` already generates (`commands.hasError`). `createClient` derives the camelCase
+accessor from the declared key automatically — the same conversion Tauri performs, just made
+explicit and typed instead of invisible. That is what makes call sites identical between A and B.
+
 ### 1. A call that never throws
 
 Both the Rust `Err(E)` **and** transport failures appear in the type:
@@ -203,7 +210,7 @@ for await (const ev of api.channel<DownloadEvent>('download', { url })) {
 import { createMockClient } from 'tauri-invoke-binding/testing'
 
 const api = createMockClient<AppCommands>({
-  hello_world: ({ myName }) => `hi ${myName}`,
+  helloWorld: ({ myName }) => `hi ${myName}`,
 })
 ```
 

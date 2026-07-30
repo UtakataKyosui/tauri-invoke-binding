@@ -18,5 +18,9 @@
  * @packageDocumentation
  */
 
-/** The package version. Replaced at release time by Changesets. */
+/**
+ * Placeholder package version. Changesets bumps the version in `package.json`
+ * on release, but nothing currently wires that value into this constant —
+ * that plumbing is part of the release infrastructure work (#4).
+ */
 export const VERSION = '0.0.0'

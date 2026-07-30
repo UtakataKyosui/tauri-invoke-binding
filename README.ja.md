@@ -149,6 +149,13 @@ type AppCommands = {
 const api = createClient<AppCommands>()
 ```
 
+`AppCommands` のコマンドキーは、Tauri が実際に wire に流す Rust のコマンド名と同じ
+**snake_case**（`invoke('has_error')`）で書きます。呼び出し側は `#[tauri::command]` 既定の
+リネーム規則や `tauri-specta` が生成するアクセサ名（`commands.hasError`）と同じ
+**camelCase**（`api.hasError()`）になります。`createClient` は宣言したキーから camelCase の
+アクセサを自動で導出します — これは Tauri 自身が行っている変換と同じもので、それを見えない
+ままにせず明示的かつ型付きにしただけです。だからこそ A と B で呼び出し側のコードが同一になります。
+
 ### 1. 絶対に throw しない呼び出し
 
 Rust の `Err(E)` も、トランスポートの失敗も、どちらも型に出ます。
@@ -198,7 +205,7 @@ for await (const ev of api.channel<DownloadEvent>('download', { url })) {
 import { createMockClient } from 'tauri-invoke-binding/testing'
 
 const api = createMockClient<AppCommands>({
-  hello_world: ({ myName }) => `hi ${myName}`,
+  helloWorld: ({ myName }) => `hi ${myName}`,
 })
 ```
 
