@@ -26,6 +26,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.9.0
         version: 2.11.1
+      ts-pattern:
+        specifier: ^5.9.0
+        version: 5.9.0
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.25)(typescript@5.9.3)
@@ -1233,6 +1236,9 @@ packages:
   ts-interface-checker@0.1.13:
     resolution: {integrity: sha512-Y/arvbn+rrz3JCKl9C4kVNfTfSm2/mEp5FSz5EsZSANGPSlQrpRI5M4PKF+mJnE52jOO90PnPSc3Ur3bTQw0gA==}
 
+  ts-pattern@5.9.0:
+    resolution: {integrity: sha512-6s5V71mX8qBUmlgbrfL33xDUwO0fq48rxAu2LBE11WBeGdpCPOsXksQbZJHvHwhrd3QjUusd3mAOM5Gg0mFBLg==}
+
   tsup@8.5.1:
     resolution: {integrity: sha512-xtgkqwdhpKWr3tKPmCkvYmS9xnQK3m3XgxZHwSUjvfTjp7YfXe5tT3GgWi0F2N+ZSMsOeWeZFh7ZZFg5iPhing==}
     engines: {node: '>=18'}
@@ -2386,6 +2392,8 @@ snapshots:
   tree-kill@1.2.2: {}
 
   ts-interface-checker@0.1.13: {}
+
+  ts-pattern@5.9.0: {}
 
   tsup@8.5.1(postcss@8.5.25)(typescript@5.9.3):
     dependencies:
