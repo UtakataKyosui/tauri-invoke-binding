@@ -1,0 +1,45 @@
+name: Feature request / 機能要望
+description: Propose something new for the runtime layer. / ランタイム層への機能提案
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Scope reminder / スコープについて**
+
+        This package is a *runtime layer* on top of Tauri IPC. It deliberately does
+        not generate types from Rust, ship a proc-macro, or publish a Rust crate —
+        see the Non-goals section of the README. Proposals in that territory are
+        better raised with `specta` / `tauri-specta` / `ts-rs`.
+
+        本パッケージは Tauri IPC の上に乗る**ランタイム層**です。型生成・proc-macro・
+        Rust クレートの提供は意図的に非目標としています（README の Non-goals 参照）。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 解決したい課題
+      description: What is painful today? Concrete code you have had to write by hand is ideal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API / 提案する API
+      description: Sketch the API you would like. It does not have to be final.
+      render: typescript
+
+  - type: input
+    id: upstream
+    attributes:
+      label: Related upstream issue / 関連する上流 issue
+      description: "If this covers a gap tracked upstream, link it. e.g. specta-rs/tauri-specta#169"
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This does not require generating TypeScript types from Rust.
+          required: true
