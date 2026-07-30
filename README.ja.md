@@ -16,6 +16,27 @@ Tauri v2 の IPC に型安全性を与える**ランタイム層**です。
 
 ---
 
+## 由来（Origin）
+
+本プロジェクトが存在する理由は、**2026-07-31 時点**で、Tauri 向け Rust→TypeScript codegen の
+筆頭である `tauri-specta` に、上流で open な Issue としてすでに報告されているものの**まだ実装
+されていない**ランタイム層の不足点が複数あるためです（全リストと Issue へのリンクは下の
+[なぜ作るのか](#なぜ作るのか) の表を参照）。本リポジトリは、その不足分に対する**先行実装**です。
+上流 Issue の解決を待たず、また `tauri-specta` 自体のスコープを変えるよう求めるものでもありま
+せん。`tauri-specta` の生成物の**上に乗り**、外側から穴を埋めます。
+
+これは意図的に時点を切った言い方です。上流は動き続けており、本パッケージが v1 に達する前に
+これらの穴のいくつかが自然に閉じている可能性もあります。以下の主張はすべて特定の上流 Issue
+番号に紐付けており、鵜呑みにするのではなく、いつでも検証・再検証できるようにしています。
+
+**本ライブラリが実際に十全に動作したことが確認できたら、該当する実装を `tauri-specta` 本体へ
+アップストリームすることを提案する予定です**（[ロードマップ L10](#ロードマップ) および
+Issue [#31][epic-l10] を参照）。最初の候補は `emitTo`（[#187][up187]）で、これは単独で切り出しやすく
+リスクの低い貢献になりそうです。本パッケージは、エコシステムを恒久的にフォークするのではなく、
+穴を素早く塞ぎながらオープンに育て、実戦で検証済みの部品を上流に還元するための橋渡し（stopgap）
+と位置づけています。「codegen 自体に手を入れないと解決できない穴（例：トランスポートエラーの
+型を生成コードに焼き込む）」に該当するかどうかは、推測で決めずそのつどオープンな場で判断します。
+
 ## なぜ作るのか
 
 Tauri v2 のフロントエンド IPC は、実質的に型がありません。
@@ -214,7 +235,7 @@ const api = createMockClient<AppCommands>({
 | L7 | モックと非 Tauri フォールバック |
 | L8 | 実行時検証（Standard Schema・オプトイン） |
 | L9 | React / Vue 統合、examples |
-| L10 | 上流への還元 |
+| L10 | 実戦検証済みの部分を `tauri-specta` へアップストリーム提案する（[#31][epic-l10]） |
 
 ## インストール
 
@@ -245,3 +266,4 @@ pnpm add tauri-invoke-binding   # リリース後
 [up187]: https://github.com/specta-rs/tauri-specta/issues/187
 [up197]: https://github.com/specta-rs/tauri-specta/issues/197
 [epic]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/1
+[epic-l10]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/31

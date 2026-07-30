@@ -17,6 +17,29 @@ That is the layer this package builds.
 
 ---
 
+## Origin
+
+This project exists because, **as of 2026-07-31**, `tauri-specta` — the leading Rust→TypeScript
+codegen tool for Tauri — has a documented set of runtime-layer gaps that are tracked as *open*
+upstream issues but not yet implemented (see the table in [Why](#why) below for the full list
+with issue links). This repository is a **preemptive implementation** of that missing layer: it
+does not wait for those upstream issues to be fixed, and it does not ask `tauri-specta` to change
+its own scope. It sits on top of `tauri-specta`'s generated output and fills the gaps from the
+outside.
+
+This is deliberately time-boxed language — upstream moves, and some of these gaps may close on
+their own before this package reaches v1. Each claim below is tied to a specific upstream issue
+number precisely so it can be checked, and re-checked, rather than taken on faith.
+
+**Once this library is proven to work end-to-end, the intent is to propose upstreaming the
+relevant pieces into `tauri-specta` itself** (see [Roadmap L10](#roadmap) and issue
+[#31][epic-l10]) — starting with `emitTo` ([#187][up187]), which looks like the cleanest,
+lowest-risk candidate to contribute directly. This package is meant to be a stopgap that closes
+gaps quickly, evolves in the open, and hands working, battle-tested pieces back to the upstream
+project rather than permanently forking the ecosystem. Where a gap turns out to require changes
+only `tauri-specta` itself can make (e.g. baking transport-error types into codegen), that
+decision is made explicitly in the open, not assumed.
+
 ## Why
 
 Tauri v2's front-end IPC surface is essentially untyped:
@@ -217,7 +240,7 @@ Tracked in the [Epic issue][epic]. Broadly:
 | L7 | Mocking and non-Tauri fallback |
 | L8 | Opt-in runtime validation (Standard Schema) |
 | L9 | React / Vue integration, examples |
-| L10 | Upstream contributions |
+| L10 | Propose upstreaming proven pieces into `tauri-specta` ([#31][epic-l10]) |
 
 ## Installation
 
@@ -248,3 +271,4 @@ worth more than code.
 [up187]: https://github.com/specta-rs/tauri-specta/issues/187
 [up197]: https://github.com/specta-rs/tauri-specta/issues/197
 [epic]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/1
+[epic-l10]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/31
