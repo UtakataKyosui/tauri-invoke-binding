@@ -1,22 +1,44 @@
 /**
  * tauri-invoke-binding
  *
- * A type-safe runtime layer for Tauri v2 IPC.
- *
- * This package is **pre-alpha and intentionally empty**. The scaffold, the
- * design docs (see the repository README) and the issue tracker landed first so
- * that the public API could be settled before any of it is written.
- *
- * Design constraint worth repeating here, because it shapes every module that
- * will be added next: this package does **not** generate types from Rust.
- * `specta` / `tauri-specta` / `ts-rs` already do that well. What is missing is
- * everything *around* the generated bindings — typed transport errors,
- * middleware, mocking, `emitTo`, async-iterable channels, raw IPC. That layer
- * is what gets built here.
+ * A type-safe runtime layer for Tauri v2 IPC. See the repository README for
+ * the full design rationale — in short: this package does not generate
+ * types from Rust (that's `specta` / `tauri-specta` / `ts-rs`'s job); it
+ * consumes generated (or hand-written) command declarations and adds the
+ * runtime layer around them — typed transport errors, a never-throws call
+ * site, middleware, mocking, `emitTo`, async-iterable channels, raw IPC.
  *
  * @see https://github.com/UtakataKyosui/tauri-invoke-binding
  * @packageDocumentation
  */
+
+export type { InvokeFn, SafeInvokeFn } from './call.js'
+export { callCommand, callCommandSafe, NotInTauriError } from './call.js'
+export type { SnakeToCamel } from './casing.js'
+export { camelToSnake, snakeToCamel } from './casing.js'
+export type { ClassifyContext } from './classify.js'
+export { classifyRejection } from './classify.js'
+export type {
+  Client,
+  CreateClientOptions,
+  FlatClient,
+  HandWrittenCommandMap,
+  NamespacedClient,
+  SafeClient,
+} from './client.js'
+export { createClient } from './client.js'
+export type {
+  Command,
+  CommandArgs,
+  CommandArgsShape,
+  CommandErr,
+  CommandMap,
+  CommandOk,
+} from './command.js'
+export type { Result } from './result.js'
+export { err, isErr, isOk, ok } from './result.js'
+export type { SafeError, TransportError } from './transport-error.js'
+export { assertExhaustive } from './transport-error.js'
 
 /**
  * Placeholder package version. Changesets bumps the version in `package.json`
