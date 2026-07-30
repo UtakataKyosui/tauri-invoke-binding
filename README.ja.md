@@ -1,8 +1,12 @@
 # tauri-invoke-binding
 
-> **ステータス: pre-alpha — 実装はまだありません。**
-> 現時点のリポジトリにあるのは設計・スコープの線引き・Issue バックログだけです。以下の
-> API は提案であって、動くコードではありません。いま一番ほしいのは設計へのフィードバックです。
+> **ステータス: pre-alpha — npm には未公開です。**
+> コア層は実装・テスト済みです：`createClient`（手書き `CommandMap`）、`tauri-specta` アダプタ
+> （`tauri-invoke-binding/specta`）、`TransportError`、絶対に throw しない `.safe.*` 呼び出し口
+> （ロードマップ L1/L2 — [Epic][epic]）。名前空間化（L1）も入っています。それ以外 —
+> ミドルウェア／キャンセル・イベント・チャネル・raw IPC・モック — はまだ設計スケッチで、
+> 動くコードではありません。該当する例にはその旨を明記しています。実装済み・スケッチのどちら
+> についても、設計へのフィードバックはいま一番ほしいものです。
 
 **English: [README.md](./README.md)**
 
@@ -128,18 +132,21 @@ Rust  #[tauri::command]
 
 > 設計スケッチです。名前も形も変わります。そのための [Issue](#ロードマップ) です。
 
-### 入口は 2 つ、呼び出し側 API は 1 つ
+### 入口は 2 つ、アクセサの命名規則は 1 つ
+
+以下の 2 つの入口はどちらも実装・テスト済みです（`packages/core/src/client.ts` /
+`packages/core/src/specta.ts`）。
 
 ```ts
 // ── A. tauri-specta を使っている場合：生成物をそのまま渡す。型の再宣言はゼロ。
-import { commands, events } from './bindings' // tauri-specta の生成物
+import { commands } from './bindings' // tauri-specta の生成物
 import { createClient } from 'tauri-invoke-binding/specta'
 
-const api = createClient(commands, events, {
-  middleware: [timeout(5_000), retry({ times: 3 }), logger()],
-})
+const api = createClient(commands)
+await api.helloWorld('Tauri')          // 位置引数。commands.helloWorld 自体のシグネチャそのまま
+await api.safe.hasError()              // 絶対に throw しない
 
-// ── B. specta を使っていない場合：手書きで宣言する。呼び出し側は A と同一。
+// ── B. specta を使っていない場合：手書きで宣言する。
 import { createClient, type Command } from 'tauri-invoke-binding'
 
 type AppCommands = {
@@ -147,20 +154,28 @@ type AppCommands = {
   has_error: Command<void, string, number>
 }
 const api = createClient<AppCommands>()
+await api.helloWorld({ myName: 'Tauri' }) // 単一の名前付き引数オブジェクト。Tauri の wire 形式に一番近い
+await api.safe.hasError()
 ```
 
-`AppCommands` のコマンドキーは、Tauri が実際に wire に流す Rust のコマンド名と同じ
-**snake_case**（`invoke('has_error')`）で書きます。呼び出し側は `#[tauri::command]` 既定の
-リネーム規則や `tauri-specta` が生成するアクセサ名（`commands.hasError`）と同じ
-**camelCase**（`api.hasError()`）になります。`createClient` は宣言したキーから camelCase の
-アクセサを自動で導出します — これは Tauri 自身が行っている変換と同じもので、それを見えない
-ままにせず明示的かつ型付きにしただけです。だからこそ A と B で呼び出し側のコードが同一になります。
+どちらの入口も、宣言側の **snake_case** から **camelCase** のアクセサ名を導出する点は共通です
+— `hello_world` も `commands.helloWorld` も `api.helloWorld` になり、`#[tauri::command]` 自身の
+既定リネームを TypeScript から見えない状態のままにしません。ここは A と B で本当に同一です。
+
+一方、**引数の渡し方**は同一ではありません。これは見落としではなく意図的な設計です。A は
+既に生成された関数をそのまま呼ぶので、それが宣言している位置引数をそのまま使います —
+関数の型からパラメータ名を安全に復元して1つのオブジェクトに詰め直す手段が TypeScript には
+ないため、そうした変換は行いません。B には委譲先の生成関数がないので、単一の名前付き引数
+オブジェクトを使います — これは `invoke(cmd, args)` が実際に wire に送る形式に最も近い形です。
+引数の渡し方さえ済めば、そこから先の `.safe.*` の挙動はどちらも同じです（下記参照）。
 
 ### 1. 絶対に throw しない呼び出し
 
 Rust の `Err(E)` も、トランスポートの失敗も、どちらも型に出ます。
 
 ```ts
+import { assertExhaustive } from 'tauri-invoke-binding'
+
 const r = await api.safe.hasError()
 
 if (r.status === 'ok') {
@@ -174,24 +189,31 @@ if (r.status === 'ok') {
     case 'panic':              break
     case 'aborted':            break
     case 'not-in-tauri':       break
+    case 'unknown':            break // 分類に失敗した場合。r.error.cause に元の値が残る
+    default:                   assertExhaustive(r.error) // ケースの handling 漏れはコンパイルエラーになる
   }
-  // 網羅性が型で担保される（黙って素通りしない）
 }
 ```
 
-### 2. キャンセルとミドルウェア
+### 2. キャンセルとミドルウェア（未実装 — [#16][i16]）
 
 ```ts
 await api.hasError({ signal: AbortSignal.timeout(1_000) })
 ```
 
-### 3. `emitTo`（上流の穴 [#187][up187]）
+ここまでで実装済みの v0.1 の呼び出し口（`createClient`・`.safe`・`tauri-specta`
+アダプタ）は、セクション1で示した引数だけを取り、末尾の `options` 引数はありません。
+「options オブジェクトなのか実引数なのか」を実行時のスキーマなしで汎用的に判別する
+仕組みは #16 のミドルウェア実装が必要なので、上の呼び出し形は「それが入ったときの
+想定」であって、現時点で動くものではありません。
+
+### 3. `emitTo`（未実装 — L4、上流の穴 [#187][up187]）
 
 ```ts
 await api.events.myDemoEvent.emitTo({ kind: 'WebviewWindow', label: 'main' }, payload)
 ```
 
-### 4. チャネルを AsyncIterable として消費
+### 4. チャネルを AsyncIterable として消費（未実装 — L5）
 
 ```ts
 for await (const ev of api.channel<DownloadEvent>('download', { url })) {
@@ -199,7 +221,7 @@ for await (const ev of api.channel<DownloadEvent>('download', { url })) {
 }
 ```
 
-### 5. テスト（上流の穴 [#197][up197]）
+### 5. テスト（未実装 — L7、上流の穴 [#197][up197]）
 
 ```ts
 import { createMockClient } from 'tauri-invoke-binding/testing'
@@ -277,3 +299,4 @@ pnpm add tauri-invoke-binding   # リリース後
 [up197]: https://github.com/specta-rs/tauri-specta/issues/197
 [epic]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/1
 [epic-l10]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/31
+[i16]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/16

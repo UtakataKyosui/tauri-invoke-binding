@@ -1,9 +1,12 @@
 # tauri-invoke-binding
 
-> **Status: pre-alpha — nothing is implemented yet.**
-> This repository currently contains the design, the scope boundary and the issue
-> backlog. The API sketches below are proposals, not shipped code. Feedback on the
-> design is exactly what is wanted right now.
+> **Status: pre-alpha — not published to npm yet.**
+> The core layer is implemented and tested: `createClient` (hand-written `CommandMap`),
+> the `tauri-specta` adapter (`tauri-invoke-binding/specta`), `TransportError`, and the
+> never-throws `.safe.*` call site (roadmap L1/L2 — [Epic][epic]). Namespacing (L1) is in
+> too. Everything past that — middleware/cancellation, events, channels, raw IPC, mocking
+> — is still a design sketch, not shipped code; each such example below says so. Feedback
+> on the design, implemented or sketched, is exactly what is wanted right now.
 
 **日本語版: [README.ja.md](./README.ja.md)**
 
@@ -133,18 +136,21 @@ Stated up front, because they define the project as much as the features do:
 > Design sketch. Names and shapes will change; that is what the [issue tracker](#roadmap)
 > is for.
 
-### Two entry points, one call-site API
+### Two entry points, one accessor-naming convention
+
+Both entry points below are implemented and tested (`packages/core/src/client.ts`,
+`packages/core/src/specta.ts`).
 
 ```ts
 // ── A. Using tauri-specta: hand over the generated object. Zero type redeclaration.
-import { commands, events } from './bindings' // tauri-specta output
+import { commands } from './bindings' // tauri-specta output
 import { createClient } from 'tauri-invoke-binding/specta'
 
-const api = createClient(commands, events, {
-  middleware: [timeout(5_000), retry({ times: 3 }), logger()],
-})
+const api = createClient(commands)
+await api.helloWorld('Tauri')          // positional — mirrors commands.helloWorld's own signature exactly
+await api.safe.hasError()              // never throws
 
-// ── B. Not using specta: declare by hand. Call sites are identical to A.
+// ── B. Not using specta: declare by hand.
 import { createClient, type Command } from 'tauri-invoke-binding'
 
 type AppCommands = {
@@ -152,20 +158,30 @@ type AppCommands = {
   has_error: Command<void, string, number>
 }
 const api = createClient<AppCommands>()
+await api.helloWorld({ myName: 'Tauri' }) // a single named-args object, matching Tauri's wire format
+await api.safe.hasError()
 ```
 
-Command keys in `AppCommands` are written **snake_case**, matching the literal Rust command
-name Tauri puts on the wire (`invoke('has_error')`). Call sites are **camelCase**
-(`api.hasError()`), matching `#[tauri::command]`'s own default renaming and the accessor names
-`tauri-specta` already generates (`commands.hasError`). `createClient` derives the camelCase
-accessor from the declared key automatically — the same conversion Tauri performs, just made
-explicit and typed instead of invisible. That is what makes call sites identical between A and B.
+Both paths derive **camelCase** accessor names from whatever the source declares in
+**snake_case** — `hello_world` / `commands.helloWorld` both become `api.helloWorld`, matching
+`#[tauri::command]`'s own default renaming instead of leaving it invisible to TypeScript. That
+part is genuinely identical between A and B.
+
+The *argument-passing convention* is not, and that is deliberate rather than an oversight: path A
+calls the already-generated function directly with whatever positional parameters it declares —
+there is no way to safely recover parameter names from a function type in order to repackage them
+into an object, so no re-shaping is attempted. Path B has no generated function to defer to, so it
+uses a single named-args object, which is the closest match to what `invoke(cmd, args)` sends over
+the wire in the first place. Either way, `.safe.*` works the same way once you're past argument
+passing — see below.
 
 ### 1. A call that never throws
 
 Both the Rust `Err(E)` **and** transport failures appear in the type:
 
 ```ts
+import { assertExhaustive } from 'tauri-invoke-binding'
+
 const r = await api.safe.hasError()
 
 if (r.status === 'ok') {
@@ -179,24 +195,32 @@ if (r.status === 'ok') {
     case 'panic':              break
     case 'aborted':            break
     case 'not-in-tauri':       break
+    case 'unknown':            break // classification failed; r.error.cause has the raw value
+    default:                   assertExhaustive(r.error) // a case left out here is a compile error
   }
-  // exhaustiveness is enforced — no silent fall-through
 }
 ```
 
-### 2. Cancellation and middleware
+### 2. Cancellation and middleware (not implemented yet — [#16][i16])
 
 ```ts
 await api.hasError({ signal: AbortSignal.timeout(1_000) })
 ```
 
-### 3. `emitTo` (upstream gap [#187][up187])
+The v0.1 call sites shipped so far (`createClient`, `.safe`, the `tauri-specta`
+adapter) take exactly the arguments shown in section 1 — no trailing
+`options` parameter. Adding one generically, without a runtime schema to
+tell an options object apart from a real args object, needs the middleware
+work tracked in issue #16; the calling convention above is what it's
+expected to look like once that lands, not what exists today.
+
+### 3. `emitTo` (not implemented yet — L4, upstream gap [#187][up187])
 
 ```ts
 await api.events.myDemoEvent.emitTo({ kind: 'WebviewWindow', label: 'main' }, payload)
 ```
 
-### 4. Channels as async iterables
+### 4. Channels as async iterables (not implemented yet — L5)
 
 ```ts
 for await (const ev of api.channel<DownloadEvent>('download', { url })) {
@@ -204,7 +228,7 @@ for await (const ev of api.channel<DownloadEvent>('download', { url })) {
 }
 ```
 
-### 5. Testing (upstream gap [#197][up197])
+### 5. Testing (not implemented yet — L7, upstream gap [#197][up197])
 
 ```ts
 import { createMockClient } from 'tauri-invoke-binding/testing'
@@ -282,3 +306,4 @@ worth more than code.
 [up197]: https://github.com/specta-rs/tauri-specta/issues/197
 [epic]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/1
 [epic-l10]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/31
+[i16]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/16
