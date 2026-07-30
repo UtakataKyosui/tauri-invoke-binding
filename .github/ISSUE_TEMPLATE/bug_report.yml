@@ -1,0 +1,56 @@
+name: Bug report / バグ報告
+description: Something does not behave as documented. / ドキュメントどおりに動かない
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please note: this project does **not** generate TypeScript types from Rust.
+        If your issue is about generated types being wrong or missing, it likely
+        belongs in [tauri-specta](https://github.com/specta-rs/tauri-specta) or
+        [ts-rs](https://github.com/Aleph-Alpha/ts-rs) instead.
+
+        本プロジェクトは Rust から TypeScript の型を生成しません。生成された型そのものの
+        問題は上流（tauri-specta / ts-rs）が適切な場合があります。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened? / 何が起きましたか
+      description: Include the actual behaviour and the behaviour you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction / 再現手順
+      description: A minimal snippet or repository. TypeScript errors — paste them in full.
+      render: typescript
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: tauri-invoke-binding version
+    validations:
+      required: true
+
+  - type: input
+    id: tauri-version
+    attributes:
+      label: "@tauri-apps/api version"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: binding-source
+    attributes:
+      label: Binding source / 型の供給元
+      options:
+        - tauri-specta (generated bindings)
+        - Hand-written command map
+        - Other
+    validations:
+      required: true

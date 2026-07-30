@@ -1,0 +1,8 @@
+packages:
+  - 'packages/*'
+  - 'examples/*'
+
+# esbuild (via tsup) needs its postinstall to fetch the platform binary.
+# Everything else stays blocked by default.
+onlyBuiltDependencies:
+  - esbuild
