@@ -73,24 +73,27 @@ type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E }
 コマンド名・引数名・引数型・戻り値型・`Result<T, E>` の判別ユニオン化・イベントのペイロード型
 は、これで全部解決しています。**ここを作り直すのは車輪の再発明であり、本プロジェクトはやりません。**
 
-### それでも残っている穴
+### それでも残っている穴と、本リポジトリがそれに対して行う先行実装
 
-以下はいずれも codegen の**外側**、ランタイムと DX の領域の問題です。多くは上流で
-open issue として追跡されています。
+以下はいずれも codegen の**外側**、ランタイムと DX の領域の問題です。各行に、上流の根拠
+（多くは独立に検証できる open issue）と、それを埋めるために本リポジトリが計画している先行実装
+を並べています。レイヤー記号の意味は [ロードマップ](#ロードマップ) を、進捗のライブチェックリスト
+は [Epic Issue][epic] を参照してください。
 
-| 穴 | 根拠 |
-| --- | --- |
-| **トランスポートエラーが型に現れない。** 生成コードは `catch (e) { if (e instanceof Error) throw e; … }` としているため、引数のシリアライズ失敗・未登録コマンド・権限拒否・パニックは**型なしで throw** されます。`Result` を返さないコマンドに至っては安全な経路が一切ありません。 | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*（`ts-pattern` の網羅マッチが破れる） |
-| **`emitTo` が使えない。** 生成される `makeEvent` は `listen` / `once` / `emit` のみ。 | [tauri-specta#187][up187] |
-| **`ipc::Request` / `ipc::Response` 非対応** — headers・raw body・`ArrayBuffer` 戻り値。 | [tauri-specta#170][up170]（*blocked on other work* ラベル） |
-| **ユニットテストの手段がない。** 生成物は `__TAURI_INVOKE` に直結した const アロー関数で差し替えにくく、非 Tauri 環境（ブラウザ・SSR・Storybook・vitest）のフォールバックもありません。 | [tauri-specta#197][up197] |
-| **コマンドが単一のフラットな名前空間。** | [tauri-specta#172][up172] |
-| **ミドルウェア層がない。** リトライ・タイムアウト・`AbortSignal` キャンセル・ロギング・インフライト重複排除は各アプリで手書きになります。生成コードの構造上、差し込み点が存在しません。 | 構造的な理由 |
-| **チャネルが callback のみ。** `Channel<T>` は `onmessage` ベースで、`for await` にできず、完了・エラーの通知規約もありません。 | `Channel<T>` の API 形状 |
-| **実行時検証がない。** 生成型はコンパイル時のみ。再生成を忘れると型と実データが静かに乖離します。 | 設計上の性質 |
-| **フレームワーク統合がない**（React hooks・Vue composables・TanStack Query）。 | 上流のスコープ外 |
+| 穴 | 上流の根拠 | 本リポジトリでの先行実装 |
+| --- | --- | --- |
+| **トランスポートエラーが型に現れない。** 生成コードは `catch (e) { if (e instanceof Error) throw e; … }` としているため、引数のシリアライズ失敗・未登録コマンド・権限拒否・パニックは**型なしで throw** されます。`Result` を返さないコマンドに至っては安全な経路が一切ありません。 | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*（`ts-pattern` の網羅マッチが破れる） | **L2** — `TransportError` 判別ユニオン、生の reject 値を正規化する分類ロジック、絶対に throw しない `api.safe.*`、網羅性の型レベルテスト（Issue #9〜#12） |
+| **`emitTo` が使えない。** 生成される `makeEvent` は `listen` / `once` / `emit` のみ。 | [tauri-specta#187][up187] | **L4** — 型付き `emitTo` と 6 種の `EventTarget` 判別ユニオン（Issue #19） |
+| **`ipc::Request` / `ipc::Response` 非対応** — headers・raw body・`ArrayBuffer` 戻り値。 | [tauri-specta#170][up170]（*blocked on other work* ラベル） | **L6** — 型付き raw body リクエストと `ArrayBuffer` レスポンス（Issue #24〜#25） |
+| **ユニットテストの手段がない。** 生成物は `__TAURI_INVOKE` に直結した const アロー関数で差し替えにくく、非 Tauri 環境（ブラウザ・SSR・Storybook・vitest）のフォールバックもありません。 | [tauri-specta#197][up197] | **L7** — 型付きハンドラを登録できる `createMockClient` と非 Tauri 環境のフォールバック戦略（Issue #26〜#27） |
+| **コマンドが単一のフラットな名前空間。** | [tauri-specta#172][up172] | **L1** — フラットなコマンドマップの上に TS 側だけで名前空間を切る仕組み（Issue #8） |
+| **ミドルウェア層がない。** リトライ・タイムアウト・`AbortSignal` キャンセル・ロギング・インフライト重複排除は各アプリで手書きになります。生成コードの構造上、差し込み点が存在しません。 | 構造的な理由 | **L3** — ミドルウェアパイプラインと `timeout` / `retry` / キャンセル / `logger` / 重複排除（Issue #13〜#18） |
+| **チャネルが callback のみ。** `Channel<T>` は `onmessage` ベースで、`for await` にできず、完了・エラーの通知規約もありません。 | `Channel<T>` の API 形状 | **L5** — `AsyncIterable` 化したチャネルと tagged enum のナローイングヘルパー（Issue #22〜#23） |
+| **実行時検証がない。** 生成型はコンパイル時のみ。再生成を忘れると型と実データが静かに乖離します。 | 設計上の性質 | **L8** — Standard Schema によるオプトイン検証（Issue #28） |
+| **フレームワーク統合がない**（React hooks・Vue composables・TanStack Query）。 | 上流のスコープ外 | **L9** — 独自キャッシュ層を作らず TanStack Query に委ねる React hooks / Vue composables（Issue #29） |
 
-どれも型生成に手を入れる必要がありません。本パッケージが占めるのはこの空間です。
+右列はどれも型生成に手を入れる必要がありません。本パッケージが占めるのはこの空間です — この線引き
+の理由は [由来（Origin）](#由来origin) を参照してください。
 
 ## 立ち位置
 

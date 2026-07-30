@@ -77,24 +77,27 @@ Command names, argument names and types, return types, `Result<T, E>` as a discr
 union, event payload types — all handled. **Rebuilding that would be reinventing the wheel,
 and this project does not do it.**
 
-### What is still missing
+### What is still missing, and what this repo does about it
 
-These gaps live *outside* codegen, in the runtime and DX layer. Most are tracked as open
-issues upstream:
+These gaps live *outside* codegen, in the runtime and DX layer. Each row cites the upstream
+evidence (mostly an open issue, checkable independently of this README) and the preemptive
+implementation planned here to close it — see [Roadmap](#roadmap) for what the layer codes mean,
+and the [Epic issue][epic] for the live checklist.
 
-| Gap | Evidence |
-| --- | --- |
-| **Transport errors are absent from the types.** Generated code does `catch (e) { if (e instanceof Error) throw e; … }`, so argument-serialization failures, unregistered commands, denied permissions and panics **throw untyped**. Commands that don't return `Result` have no safe path at all. | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*, breaking exhaustive `ts-pattern` matching |
-| **`emitTo` is unavailable.** The generated `makeEvent` exposes `listen` / `once` / `emit` only. | [tauri-specta#187][up187] |
-| **`ipc::Request` / `ipc::Response` unsupported** — headers, raw bodies, `ArrayBuffer` responses. | [tauri-specta#170][up170] (labelled *blocked on other work*) |
-| **No unit-testing story.** Generated commands are const arrow functions bound directly to `__TAURI_INVOKE`, awkward to stub. No fallback for non-Tauri contexts (browser, SSR, Storybook, vitest). | [tauri-specta#197][up197] |
-| **Commands live in one flat namespace.** | [tauri-specta#172][up172] |
-| **No middleware layer.** Retry, timeout, `AbortSignal` cancellation, logging and in-flight deduplication are hand-rolled per app — the generated code offers no seam to hook into. | structural |
-| **Channels are callback-only.** `Channel<T>` drives `onmessage`; no `for await`, no completion or error convention. | `Channel<T>` API shape |
-| **No runtime validation.** Generated types are compile-time only, so a forgotten regeneration silently drifts from reality. | by design |
-| **No framework integration** (React hooks, Vue composables, TanStack Query). | out of scope upstream |
+| Gap | Upstream evidence | Preemptive implementation here |
+| --- | --- | --- |
+| **Transport errors are absent from the types.** Generated code does `catch (e) { if (e instanceof Error) throw e; … }`, so argument-serialization failures, unregistered commands, denied permissions and panics **throw untyped**. Commands that don't return `Result` have no safe path at all. | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*, breaking exhaustive `ts-pattern` matching | **L2** — a `TransportError` discriminated union, a classifier that normalizes raw rejections into it, a `api.safe.*` call site that never throws, and exhaustiveness type tests (issues #9–#12) |
+| **`emitTo` is unavailable.** The generated `makeEvent` exposes `listen` / `once` / `emit` only. | [tauri-specta#187][up187] | **L4** — typed `emitTo` plus the 6-way `EventTarget` union (issue #19) |
+| **`ipc::Request` / `ipc::Response` unsupported** — headers, raw bodies, `ArrayBuffer` responses. | [tauri-specta#170][up170] (labelled *blocked on other work*) | **L6** — typed raw-body requests and `ArrayBuffer` responses (issues #24–#25) |
+| **No unit-testing story.** Generated commands are const arrow functions bound directly to `__TAURI_INVOKE`, awkward to stub. No fallback for non-Tauri contexts (browser, SSR, Storybook, vitest). | [tauri-specta#197][up197] | **L7** — `createMockClient` with typed handlers, plus a non-Tauri fallback strategy (issues #26–#27) |
+| **Commands live in one flat namespace.** | [tauri-specta#172][up172] | **L1** — TS-side module namespacing on top of the flat command map (issue #8) |
+| **No middleware layer.** Retry, timeout, `AbortSignal` cancellation, logging and in-flight deduplication are hand-rolled per app — the generated code offers no seam to hook into. | structural | **L3** — a middleware pipeline plus `timeout` / `retry` / cancellation / `logger` / dedupe (issues #13–#18) |
+| **Channels are callback-only.** `Channel<T>` drives `onmessage`; no `for await`, no completion or error convention. | `Channel<T>` API shape | **L5** — `AsyncIterable` channels and a tagged-enum narrowing helper (issues #22–#23) |
+| **No runtime validation.** Generated types are compile-time only, so a forgotten regeneration silently drifts from reality. | by design | **L8** — opt-in Standard Schema validation (issue #28) |
+| **No framework integration** (React hooks, Vue composables, TanStack Query). | out of scope upstream | **L9** — React hooks / Vue composables, backed by TanStack Query rather than a bespoke cache (issue #29) |
 
-None of these require touching type generation. That is the space this package occupies.
+None of the right-hand column requires touching type generation. That is the space this package
+occupies — see [Origin](#origin) for why that boundary is drawn where it is.
 
 ## Positioning
 
