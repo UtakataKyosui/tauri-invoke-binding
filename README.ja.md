@@ -5,9 +5,11 @@
 > （`tauri-invoke-binding/specta`）、`TransportError`、絶対に throw しない `.safe.*` 呼び出し口
 > （ロードマップ L1/L2 — [Epic][epic]）。名前空間化（L1）も入っています。ミドルウェアパイプライン
 > と `AbortSignal` によるキャンセル（L3）も実装済みです：`timeout` / `retry` / `logger` / `dedupe`、
-> および全呼び出しでの `signal` 対応。それ以外 — イベント・チャネル・raw IPC・モック — はまだ
-> 設計スケッチで、動くコードではありません。該当する例にはその旨を明記しています。実装済み・
-> スケッチのどちらについても、設計へのフィードバックはいま一番ほしいものです。
+> および全呼び出しでの `signal` 対応。イベント（L4、`tauri-invoke-binding/events`）も実装済みです：
+> 6 種の `EventTarget` 判別ユニオンを備えた型付き `emitTo`、`AbortSignal` による解除と一括解除
+> スコープ、組み込み `TauriEvent`（16 種）の型付きペイロード。それ以外 — チャネル・raw IPC・
+> モック — はまだ設計スケッチで、動くコードではありません。該当する例にはその旨を明記しています。
+> 実装済み・スケッチのどちらについても、設計へのフィードバックはいま一番ほしいものです。
 
 **English: [README.md](./README.md)**
 
@@ -88,7 +90,7 @@ type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E }
 | 穴 | 上流の根拠 | 本リポジトリでの先行実装 |
 | --- | --- | --- |
 | **トランスポートエラーが型に現れない。** 生成コードは `catch (e) { if (e instanceof Error) throw e; … }` としているため、引数のシリアライズ失敗・未登録コマンド・権限拒否・パニックは**型なしで throw** されます。`Result` を返さないコマンドに至っては安全な経路が一切ありません。 | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*（`ts-pattern` の網羅マッチが破れる） | **L2** — `TransportError` 判別ユニオン、生の reject 値を正規化する分類ロジック、絶対に throw しない `api.safe.*`、網羅性の型レベルテスト（Issue #9〜#12） |
-| **`emitTo` が使えない。** 生成される `makeEvent` は `listen` / `once` / `emit` のみ。 | [tauri-specta#187][up187] | **L4** — 型付き `emitTo` と 6 種の `EventTarget` 判別ユニオン（Issue #19） |
+| **`emitTo` が使えない。** 生成される `makeEvent` は `listen` / `once` / `emit` のみ。 | [tauri-specta#187][up187] | **L4（完了）** — 型付き `emitTo` と 6 種の `EventTarget` 判別ユニオン（Issue #19） |
 | **`ipc::Request` / `ipc::Response` 非対応** — headers・raw body・`ArrayBuffer` 戻り値。 | [tauri-specta#170][up170]（*blocked on other work* ラベル） | **L6** — 型付き raw body リクエストと `ArrayBuffer` レスポンス（Issue #24〜#25） |
 | **ユニットテストの手段がない。** 生成物は `__TAURI_INVOKE` に直結した const アロー関数で差し替えにくく、非 Tauri 環境（ブラウザ・SSR・Storybook・vitest）のフォールバックもありません。 | [tauri-specta#197][up197] | **L7** — 型付きハンドラを登録できる `createMockClient` と非 Tauri 環境のフォールバック戦略（Issue #26〜#27） |
 | **コマンドが単一のフラットな名前空間。** | [tauri-specta#172][up172] | **L1** — フラットなコマンドマップの上に TS 側だけで名前空間を切る仕組み（Issue #8） |
@@ -265,10 +267,29 @@ await api.helloWorld({ myName: 'Tauri' }, { signal: controller.signal })
 のバックオフ待機中の abort も即座に中断します。**Tauri の IPC 自体はキャンセルできません**
 — `timeout` と同じ制約で、Rust 側のハンドラは中断されずそのまま走り続けます。
 
-### 3. `emitTo`（未実装 — L4、上流の穴 [#187][up187]）
+### 3. イベント — `emitTo`・`AbortSignal` 解除・組み込みペイロード（L4、実装済み — 上流の穴 [#187][up187]）
 
 ```ts
-await api.events.myDemoEvent.emitTo({ kind: 'WebviewWindow', label: 'main' }, payload)
+import {
+  createEventClient,
+  createEventScope,
+  TauriEvent,
+  type BuiltinEventMap,
+} from 'tauri-invoke-binding/events'
+
+type AppEvents = { myDemoEvent: DemoEvent }
+const events = createEventClient<BuiltinEventMap & AppEvents>()
+
+// 6 種の EventTarget 判別ユニオンを備えた型付き emitTo（Issue #19）:
+await events.myDemoEvent.emitTo({ kind: 'WebviewWindow', label: 'main' }, payload)
+
+// AbortSignal による解除と、複数リスナの一括解除スコープ（Issue #20）:
+const scope = createEventScope()
+scope.listen('myDemoEvent', (e) => console.log(e.payload))
+scope.dispose() // このスコープ経由で登録した全リスナを解除
+
+// 組み込み TauriEvent（16 種）すべての型付きペイロードが標準で使える（Issue #21）:
+await events.on(TauriEvent.WINDOW_RESIZED, (e) => console.log(e.payload.width))
 ```
 
 ### 4. チャネルを AsyncIterable として消費（未実装 — L5）
@@ -298,7 +319,7 @@ const api = createMockClient<AppCommands>({
 | 型付きトランスポートエラー | ❌（[#169][up169]） | ❌ | — | ✅ 予定 |
 | ミドルウェア（retry/timeout/cancel） | ❌ | ❌ | — | ✅ 実装済み |
 | モック・非 Tauri フォールバック | ❌（[#197][up197]） | ❌ | — | ✅ 予定 |
-| `emitTo` | ❌（[#187][up187]） | ✅ | — | ✅ 予定 |
+| `emitTo` | ❌（[#187][up187]） | ✅ | — | ✅ 実装済み |
 | AsyncIterable なチャネル | ❌ | ❌ | — | ✅ 予定 |
 | raw `ipc::Request`/`Response` | ❌（[#170][up170]） | ❌ | — | ✅ 予定 |
 | 他と**併用**できる | — | — | — | ✅ それが狙い |
@@ -319,7 +340,7 @@ const api = createMockClient<AppCommands>({
 | L1 | バインディング抽象 — `tauri-specta` アダプタ + 手書きコマンドマップ |
 | L2 | 型付きトランスポートエラー ← 目玉機能 |
 | L3 | ミドルウェア / インターセプタ |
-| L4 | イベント（`emitTo` を含む） |
+| L4 | イベント（`emitTo` を含む） ← 完了 |
 | L5 | AsyncIterable なチャネル |
 | L6 | raw IPC |
 | L7 | モックと非 Tauri フォールバック |

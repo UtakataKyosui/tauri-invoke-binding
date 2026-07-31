@@ -35,6 +35,11 @@
       "import": "./dist/specta.js",
       "require": "./dist/specta.cjs"
     },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "import": "./dist/events.js",
+      "require": "./dist/events.cjs"
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",

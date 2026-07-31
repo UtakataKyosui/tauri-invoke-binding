@@ -5,10 +5,12 @@
 > the `tauri-specta` adapter (`tauri-invoke-binding/specta`), `TransportError`, and the
 > never-throws `.safe.*` call site (roadmap L1/L2 — [Epic][epic]). Namespacing (L1) is in
 > too. The middleware pipeline and `AbortSignal` cancellation (L3) are also implemented:
-> `timeout`, `retry`, `logger`, and `dedupe`, plus `signal` on every call. Everything past
-> that — events, channels, raw IPC, mocking — is still a design sketch, not shipped code;
-> each such example below says so. Feedback on the design, implemented or sketched, is
-> exactly what is wanted right now.
+> `timeout`, `retry`, `logger`, and `dedupe`, plus `signal` on every call. Events (L4) are
+> implemented too (`tauri-invoke-binding/events`): typed `emitTo` with the 6-way
+> `EventTarget` union, `AbortSignal`-based unlisten with a bulk-unlisten scope, and typed
+> payloads for the 16 built-in `TauriEvent`s. Everything past that — channels, raw IPC,
+> mocking — is still a design sketch, not shipped code; each such example below says so.
+> Feedback on the design, implemented or sketched, is exactly what is wanted right now.
 
 **日本語版: [README.ja.md](./README.ja.md)**
 
@@ -92,7 +94,7 @@ and the [Epic issue][epic] for the live checklist.
 | Gap | Upstream evidence | Preemptive implementation here |
 | --- | --- | --- |
 | **Transport errors are absent from the types.** Generated code does `catch (e) { if (e instanceof Error) throw e; … }`, so argument-serialization failures, unregistered commands, denied permissions and panics **throw untyped**. Commands that don't return `Result` have no safe path at all. | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*, breaking exhaustive `ts-pattern` matching | **L2** — a `TransportError` discriminated union, a classifier that normalizes raw rejections into it, a `api.safe.*` call site that never throws, and exhaustiveness type tests (issues #9–#12) |
-| **`emitTo` is unavailable.** The generated `makeEvent` exposes `listen` / `once` / `emit` only. | [tauri-specta#187][up187] | **L4** — typed `emitTo` plus the 6-way `EventTarget` union (issue #19) |
+| **`emitTo` is unavailable.** The generated `makeEvent` exposes `listen` / `once` / `emit` only. | [tauri-specta#187][up187] | **L4 (done)** — typed `emitTo` plus the 6-way `EventTarget` union (issue #19) |
 | **`ipc::Request` / `ipc::Response` unsupported** — headers, raw bodies, `ArrayBuffer` responses. | [tauri-specta#170][up170] (labelled *blocked on other work*) | **L6** — typed raw-body requests and `ArrayBuffer` responses (issues #24–#25) |
 | **No unit-testing story.** Generated commands are const arrow functions bound directly to `__TAURI_INVOKE`, awkward to stub. No fallback for non-Tauri contexts (browser, SSR, Storybook, vitest). | [tauri-specta#197][up197] | **L7** — `createMockClient` with typed handlers, plus a non-Tauri fallback strategy (issues #26–#27) |
 | **Commands live in one flat namespace.** | [tauri-specta#172][up172] | **L1** — TS-side module namespacing on top of the flat command map (issue #8) |
@@ -274,10 +276,29 @@ throwing `AbortError` on the throwing path); an abort during `retry`'s backoff w
 interrupts immediately instead of waiting it out. **Tauri's IPC cannot be cancelled** —
 same caveat as `timeout` — the Rust-side handler keeps running regardless.
 
-### 3. `emitTo` (not implemented yet — L4, upstream gap [#187][up187])
+### 3. Events — `emitTo`, `AbortSignal` unlisten, built-in payloads (L4, implemented — upstream gap [#187][up187])
 
 ```ts
-await api.events.myDemoEvent.emitTo({ kind: 'WebviewWindow', label: 'main' }, payload)
+import {
+  createEventClient,
+  createEventScope,
+  TauriEvent,
+  type BuiltinEventMap,
+} from 'tauri-invoke-binding/events'
+
+type AppEvents = { myDemoEvent: DemoEvent }
+const events = createEventClient<BuiltinEventMap & AppEvents>()
+
+// Typed emitTo, with the 6-way EventTarget union (issue #19):
+await events.myDemoEvent.emitTo({ kind: 'WebviewWindow', label: 'main' }, payload)
+
+// AbortSignal-based unlisten, and a scope for unlistening several at once (issue #20):
+const scope = createEventScope()
+scope.listen('myDemoEvent', (e) => console.log(e.payload))
+scope.dispose() // unlistens everything registered through this scope
+
+// Typed payloads for all 16 built-in TauriEvents, out of the box (issue #21):
+await events.on(TauriEvent.WINDOW_RESIZED, (e) => console.log(e.payload.width))
 ```
 
 ### 4. Channels as async iterables (not implemented yet — L5)
@@ -307,7 +328,7 @@ const api = createMockClient<AppCommands>({
 | Typed transport errors | ❌ ([#169][up169]) | ❌ | n/a | ✅ planned |
 | Middleware (retry/timeout/cancel) | ❌ | ❌ | n/a | ✅ implemented |
 | Mocking / non-Tauri fallback | ❌ ([#197][up197]) | ❌ | n/a | ✅ planned |
-| `emitTo` | ❌ ([#187][up187]) | ✅ | n/a | ✅ planned |
+| `emitTo` | ❌ ([#187][up187]) | ✅ | n/a | ✅ implemented |
 | Async-iterable channels | ❌ | ❌ | n/a | ✅ planned |
 | Raw `ipc::Request`/`Response` | ❌ ([#170][up170]) | ❌ | n/a | ✅ planned |
 | Works *with* the others | — | — | — | ✅ that's the point |
@@ -328,7 +349,7 @@ Tracked in the [Epic issue][epic]. Broadly:
 | L1 | Binding abstraction — `tauri-specta` adapter + hand-written command map |
 | L2 | Typed transport errors ← the headline feature |
 | L3 | Middleware / interceptors |
-| L4 | Events, incl. `emitTo` |
+| L4 | Events, incl. `emitTo` ← done |
 | L5 | Async-iterable channels |
 | L6 | Raw IPC |
 | L7 | Mocking and non-Tauri fallback |
