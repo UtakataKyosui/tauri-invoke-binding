@@ -10,8 +10,8 @@
  * `typeof commands`, so it isn't pinned to any particular version of the
  * generator.
  *
- * Event support (`events`, `emitTo`, ...) is out of scope here — that's
- * issues #18–#21 (L4). This module only adapts commands.
+ * Event support (`events`, `emitTo`, ...) is out of scope here — see
+ * events.ts (issues #19–#21, L4) instead. This module only adapts commands.
  */
 
 import type { FlatClient, SafeClient } from './client.js'
