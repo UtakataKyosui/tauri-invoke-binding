@@ -39,12 +39,21 @@ type Register<T> = (
  * `settled` guards against a double-unlisten when both the caller's
  * returned function and the abort listener could otherwise fire: whichever
  * runs first wins, the other is a no-op.
+ *
+ * `autoCleanupAfterFire` is for `once`: Tauri's own `once` auto-unregisters
+ * after the handler fires, but that happens on the Rust side — this
+ * wrapper's own `signal.addEventListener('abort', onAbort)` has no way to
+ * know that happened, and would otherwise stay attached to `signal` forever
+ * (a real leak for a long-lived signal, e.g. one shared by an `EventScope`
+ * across many `once` registrations). When set, the handler is wrapped to run
+ * `cleanup` right after firing, which removes the abort listener too.
  */
 async function listenWithSignal<T>(
   register: Register<T>,
   event: EventName,
   handler: EventCallback<T>,
   options: ListenOptions | undefined,
+  autoCleanupAfterFire = false,
 ): Promise<UnlistenFn> {
   const { signal, ...rest } = options ?? {}
   if (signal?.aborted) return noopUnlisten
@@ -65,7 +74,14 @@ async function listenWithSignal<T>(
   }
   signal?.addEventListener('abort', onAbort, { once: true })
 
-  const unlisten = await register(event, handler, rest)
+  const registeredHandler: EventCallback<T> = autoCleanupAfterFire
+    ? (evt) => {
+        handler(evt)
+        cleanup()
+      }
+    : handler
+
+  const unlisten = await register(event, registeredHandler, rest)
   realUnlisten = unlisten
 
   if (abortedDuringRegistration) {
@@ -99,13 +115,16 @@ export function listen<T>(
 }
 
 /** `once` with `AbortSignal` support (issue #20). Identical to
- * `@tauri-apps/api/event`'s `once` otherwise. */
+ * `@tauri-apps/api/event`'s `once` otherwise, plus: once the handler fires,
+ * this wrapper's own bookkeeping on `signal` is cleaned up immediately
+ * rather than lingering until `signal` eventually aborts (see the
+ * `autoCleanupAfterFire` doc comment on `listenWithSignal`). */
 export function once<T>(
   event: EventName,
   handler: EventCallback<T>,
   options?: ListenOptions,
 ): Promise<UnlistenFn> {
-  return listenWithSignal(rawOnce, event, handler, options)
+  return listenWithSignal(rawOnce, event, handler, options, true)
 }
 
 /**
@@ -132,15 +151,32 @@ export interface EventScope {
   dispose(): void
 }
 
+/**
+ * `scope.listen`/`scope.once` are typed to return `void` — deliberately, to
+ * match the synchronous-looking `addEventListener` shape the doc comment on
+ * `EventScope` advertises — so registration failures (e.g. calling this
+ * outside a Tauri webview) have no route back to the caller the way
+ * `await`ing the standalone `listen`/`once` would. Left as a bare `void
+ * promise`, that failure becomes an unhandled promise rejection instead:
+ * silent in the success path, but a crash-worthy unhandled rejection in the
+ * failure path. Routing it through `console.error` keeps the fire-and-forget
+ * ergonomics while still surfacing the failure somewhere.
+ */
+function reportRegistrationError(error: unknown): void {
+  console.error('[tauri-invoke-binding] event registration failed:', error)
+}
+
 export function createEventScope(): EventScope {
   const controller = new AbortController()
   return {
     signal: controller.signal,
     listen(event, handler, options) {
-      void listen(event, handler, { ...options, signal: controller.signal })
+      listen(event, handler, { ...options, signal: controller.signal }).catch(
+        reportRegistrationError,
+      )
     },
     once(event, handler, options) {
-      void once(event, handler, { ...options, signal: controller.signal })
+      once(event, handler, { ...options, signal: controller.signal }).catch(reportRegistrationError)
     },
     dispose() {
       controller.abort()

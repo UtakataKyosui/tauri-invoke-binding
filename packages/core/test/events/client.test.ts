@@ -80,7 +80,15 @@ describe('createEventClient — per-event accessors (issue #19)', () => {
     expect(mockRawListen).toHaveBeenCalledWith('myDemoEvent', handler, {})
 
     await events.myDemoEvent.once(handler)
-    expect(mockRawOnce).toHaveBeenCalledWith('myDemoEvent', handler, {})
+    // `once` wraps the handler internally (to auto-cleanup its abort
+    // listener once it fires — see listen.test.ts), so the function
+    // registered with the underlying `once` is not `handler` itself; assert
+    // it forwards through to it instead.
+    expect(mockRawOnce).toHaveBeenCalledWith('myDemoEvent', expect.any(Function), {})
+    const registeredHandler = mockRawOnce.mock.calls[0]?.[1]
+    const fakeEvent = { event: 'myDemoEvent', id: 1, payload: { count: 1 } }
+    registeredHandler?.(fakeEvent)
+    expect(handler).toHaveBeenCalledWith(fakeEvent)
   })
 
   it('caches the per-event accessor object across accesses', () => {

@@ -108,6 +108,41 @@ describe('once (issue #20)', () => {
     unlisten()
     expect(realUnlisten).toHaveBeenCalledOnce()
   })
+
+  it('removes its own abort listener once the handler fires, instead of leaking it on `signal` forever', async () => {
+    const realUnlisten = vi.fn()
+    mockRawOnce.mockResolvedValue(realUnlisten)
+    const ac = new AbortController()
+    const handler = vi.fn()
+
+    await once('foo', handler, { signal: ac.signal })
+    // Simulate Tauri firing the once-listener: invoke the handler that was
+    // actually registered with the (mocked) underlying `once`.
+    const registeredHandler = mockRawOnce.mock.calls[0]?.[1]
+    const fakeEvent = { event: 'foo', id: 1, payload: undefined }
+    registeredHandler?.(fakeEvent)
+
+    // Firing should have triggered auto-cleanup: the real unlisten already
+    // ran once as part of that cleanup.
+    expect(realUnlisten).toHaveBeenCalledOnce()
+
+    // A later abort must not call it again — the abort listener should
+    // already have been removed by the auto-cleanup above.
+    ac.abort()
+    expect(realUnlisten).toHaveBeenCalledOnce()
+  })
+
+  it('still passes the payload through to the caller-supplied handler when firing', async () => {
+    mockRawOnce.mockResolvedValue(vi.fn())
+    const handler = vi.fn()
+
+    await once('foo', handler)
+    const registeredHandler = mockRawOnce.mock.calls[0]?.[1]
+    const fakeEvent = { event: 'foo', id: 1, payload: { hello: 'world' } }
+    registeredHandler?.(fakeEvent)
+
+    expect(handler).toHaveBeenCalledWith(fakeEvent)
+  })
 })
 
 describe('createEventScope (issue #20 — bulk unlisten)', () => {
@@ -136,5 +171,25 @@ describe('createEventScope (issue #20 — bulk unlisten)', () => {
     expect(scope.signal.aborted).toBe(false)
     scope.dispose()
     expect(scope.signal.aborted).toBe(true)
+  })
+
+  it('reports a registration failure instead of leaving an unhandled rejection', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const reason = new Error('not in a Tauri webview')
+    mockRawListen.mockRejectedValueOnce(reason)
+
+    const scope = createEventScope()
+    // If this rejection were left as a bare `void promise`, vitest's
+    // unhandled-rejection tracking would fail this test on its own even
+    // without the assertion below.
+    scope.listen('a', vi.fn())
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(consoleError).toHaveBeenCalledWith(
+      '[tauri-invoke-binding] event registration failed:',
+      reason,
+    )
+    consoleError.mockRestore()
   })
 })
