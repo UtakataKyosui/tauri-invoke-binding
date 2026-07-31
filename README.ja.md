@@ -7,9 +7,13 @@
 > と `AbortSignal` によるキャンセル（L3）も実装済みです：`timeout` / `retry` / `logger` / `dedupe`、
 > および全呼び出しでの `signal` 対応。イベント（L4、`tauri-invoke-binding/events`）も実装済みです：
 > 6 種の `EventTarget` 判別ユニオンを備えた型付き `emitTo`、`AbortSignal` による解除と一括解除
-> スコープ、組み込み `TauriEvent`（16 種）の型付きペイロード。それ以外 — チャネル・raw IPC・
-> モック — はまだ設計スケッチで、動くコードではありません。該当する例にはその旨を明記しています。
-> 実装済み・スケッチのどちらについても、設計へのフィードバックはいま一番ほしいものです。
+> スコープ、組み込み `TauriEvent`（16 種）の型付きペイロード。チャネル（L5）と raw IPC（L6）も
+> 実装済みです：`Channel<T>` を `for await` で消費できる `invokeChannel` / `createChannel`
+> （バックプレッシャー付き）、tagged enum の 3 表現に対応したナローイングヘルパー、型付き
+> raw body リクエスト（`createRawClient`）、`ArrayBuffer` を返すコマンドの型付け。それ以外 —
+> モック・実行時検証・フレームワーク統合 — はまだ設計スケッチで、動くコードではありません。
+> 該当する例にはその旨を明記しています。実装済み・スケッチのどちらについても、設計への
+> フィードバックはいま一番ほしいものです。
 
 **English: [README.md](./README.md)**
 
@@ -91,11 +95,11 @@ type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E }
 | --- | --- | --- |
 | **トランスポートエラーが型に現れない。** 生成コードは `catch (e) { if (e instanceof Error) throw e; … }` としているため、引数のシリアライズ失敗・未登録コマンド・権限拒否・パニックは**型なしで throw** されます。`Result` を返さないコマンドに至っては安全な経路が一切ありません。 | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*（`ts-pattern` の網羅マッチが破れる） | **L2** — `TransportError` 判別ユニオン、生の reject 値を正規化する分類ロジック、絶対に throw しない `api.safe.*`、網羅性の型レベルテスト（Issue #9〜#12） |
 | **`emitTo` が使えない。** 生成される `makeEvent` は `listen` / `once` / `emit` のみ。 | [tauri-specta#187][up187] | **L4（完了）** — 型付き `emitTo` と 6 種の `EventTarget` 判別ユニオン（Issue #19） |
-| **`ipc::Request` / `ipc::Response` 非対応** — headers・raw body・`ArrayBuffer` 戻り値。 | [tauri-specta#170][up170]（*blocked on other work* ラベル） | **L6** — 型付き raw body リクエストと `ArrayBuffer` レスポンス（Issue #24〜#25） |
+| **`ipc::Request` / `ipc::Response` 非対応** — headers・raw body・`ArrayBuffer` 戻り値。 | [tauri-specta#170][up170]（*blocked on other work* ラベル） | **L6（完了）** — 型付き raw body リクエストと `ArrayBuffer` レスポンス（Issue #24〜#25） |
 | **ユニットテストの手段がない。** 生成物は `__TAURI_INVOKE` に直結した const アロー関数で差し替えにくく、非 Tauri 環境（ブラウザ・SSR・Storybook・vitest）のフォールバックもありません。 | [tauri-specta#197][up197] | **L7** — 型付きハンドラを登録できる `createMockClient` と非 Tauri 環境のフォールバック戦略（Issue #26〜#27） |
 | **コマンドが単一のフラットな名前空間。** | [tauri-specta#172][up172] | **L1** — フラットなコマンドマップの上に TS 側だけで名前空間を切る仕組み（Issue #8） |
 | **ミドルウェア層がない。** リトライ・タイムアウト・`AbortSignal` キャンセル・ロギング・インフライト重複排除は各アプリで手書きになります。生成コードの構造上、差し込み点が存在しません。 | 構造的な理由 | **L3** — ミドルウェアパイプラインと `timeout` / `retry` / キャンセル / `logger` / 重複排除（Issue #13〜#18） |
-| **チャネルが callback のみ。** `Channel<T>` は `onmessage` ベースで、`for await` にできず、完了・エラーの通知規約もありません。 | `Channel<T>` の API 形状 | **L5** — `AsyncIterable` 化したチャネルと tagged enum のナローイングヘルパー（Issue #22〜#23） |
+| **チャネルが callback のみ。** `Channel<T>` は `onmessage` ベースで、`for await` にできず、完了・エラーの通知規約もありません。 | `Channel<T>` の API 形状 | **L5（完了）** — `AsyncIterable` 化したチャネルと tagged enum のナローイングヘルパー（Issue #22〜#23） |
 | **実行時検証がない。** 生成型はコンパイル時のみ。再生成を忘れると型と実データが静かに乖離します。 | 設計上の性質 | **L8** — Standard Schema によるオプトイン検証（Issue #28） |
 | **フレームワーク統合がない**（React hooks・Vue composables・TanStack Query）。 | 上流のスコープ外 | **L9** — 独自キャッシュ層を作らず TanStack Query に委ねる React hooks / Vue composables（Issue #29） |
 
@@ -292,12 +296,62 @@ scope.dispose() // このスコープ経由で登録した全リスナを解除
 await events.on(TauriEvent.WINDOW_RESIZED, (e) => console.log(e.payload.width))
 ```
 
-### 4. チャネルを AsyncIterable として消費（未実装 — L5）
+### 4. チャネルを AsyncIterable として消費（実装済み — L5、Issue #22）
+
+`Channel<T>` は callback ベースで完了を表現できないので、`invokeChannel` はコマンド自身の
+Promise が解決／reject したタイミングをストリームの終わり／エラーとして扱う：
 
 ```ts
-for await (const ev of api.channel<DownloadEvent>('download', { url })) {
+import { invokeChannel } from 'tauri-invoke-binding'
+
+for await (const ev of invokeChannel<DownloadEvent>((channel) =>
+  api.download({ url }, channel),
+)) {
   // ev: DownloadEvent
 }
+```
+
+バックプレッシャーは `highWaterMark`（既定 1024）でバッファを上限付けし、超過時の挙動は
+`overflow: 'error' | 'drop-oldest' | 'drop-newest'`（既定 `'error'`）で選べる。callback 形式
+（`channel.onmessage = ...`）もそのまま使える — `for await` は強制されない。
+
+tagged enum（`Started` / `Progress` / `Finished` のような Rust の enum）を `switch` なしで
+narrowing するヘルパりも同梱（Issue #23）。serde の 3 表現すべてに対応：
+
+```ts
+import { matchAdjacentlyTagged } from 'tauri-invoke-binding'
+
+for await (const ev of stream) {
+  matchAdjacentlyTagged('event', 'data', ev, {
+    Started: ({ url }) => console.log('start', url),
+    Progress: ({ chunkLength }) => console.log('chunk', chunkLength),
+    Finished: () => console.log('done'),
+  })
+}
+```
+
+### raw IPC — `ipc::Request` / `ipc::Response`（実装済み — L6、Issue #24〜#25）
+
+```ts
+import { createRawClient, toUint8Array, type RawCommand } from 'tauri-invoke-binding'
+
+type AppRawCommands = { upload: RawCommand<void, string> }
+const raw = createRawClient<AppRawCommands>()
+await raw.upload(new Uint8Array([1, 2, 3]), { headers: { Authorization: 'key' } })
+```
+
+`RawCommand` は通常の `Command`（JSON args）とは型として区別されるので、raw ボディが要る
+コマンドに JSON オブジェクトを渡す・その逆、はどちらも型エラーになる。`tauri::ipc::Response`
+（`ArrayBuffer` 戻り値）は `BinaryCommand<Args, Err>` として宣言でき、通常の `createClient` /
+`tauri-specta` アダプタからそのまま呼べる：
+
+```ts
+import type { BinaryCommand } from 'tauri-invoke-binding'
+import { toBlob } from 'tauri-invoke-binding'
+
+type AppCommands = { read_file: BinaryCommand<{ path: string }> }
+const buffer = await api.readFile({ path: '/tmp/x' }) // buffer: ArrayBuffer
+const blob = toBlob(buffer, 'application/octet-stream')
 ```
 
 ### 5. テスト（未実装 — L7、上流の穴 [#197][up197]）
@@ -320,8 +374,8 @@ const api = createMockClient<AppCommands>({
 | ミドルウェア（retry/timeout/cancel） | ❌ | ❌ | — | ✅ 実装済み |
 | モック・非 Tauri フォールバック | ❌（[#197][up197]） | ❌ | — | ✅ 予定 |
 | `emitTo` | ❌（[#187][up187]） | ✅ | — | ✅ 実装済み |
-| AsyncIterable なチャネル | ❌ | ❌ | — | ✅ 予定 |
-| raw `ipc::Request`/`Response` | ❌（[#170][up170]） | ❌ | — | ✅ 予定 |
+| AsyncIterable なチャネル | ❌ | ❌ | — | ✅ 実装済み |
+| raw `ipc::Request`/`Response` | ❌（[#170][up170]） | ❌ | — | ✅ 実装済み |
 | 他と**併用**できる | — | — | — | ✅ それが狙い |
 
 `tauri-specta` と `TauRPC` はそれぞれの領域で優れており、本パッケージはそれらを置き換えよう
@@ -341,8 +395,8 @@ const api = createMockClient<AppCommands>({
 | L2 | 型付きトランスポートエラー ← 目玉機能 |
 | L3 | ミドルウェア / インターセプタ |
 | L4 | イベント（`emitTo` を含む） ← 完了 |
-| L5 | AsyncIterable なチャネル |
-| L6 | raw IPC |
+| L5 | AsyncIterable なチャネル ← 完了 |
+| L6 | raw IPC ← 完了 |
 | L7 | モックと非 Tauri フォールバック |
 | L8 | 実行時検証（Standard Schema・オプトイン） |
 | L9 | React / Vue 統合、examples |

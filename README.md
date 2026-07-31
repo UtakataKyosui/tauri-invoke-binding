@@ -8,9 +8,14 @@
 > `timeout`, `retry`, `logger`, and `dedupe`, plus `signal` on every call. Events (L4) are
 > implemented too (`tauri-invoke-binding/events`): typed `emitTo` with the 6-way
 > `EventTarget` union, `AbortSignal`-based unlisten with a bulk-unlisten scope, and typed
-> payloads for the 16 built-in `TauriEvent`s. Everything past that — channels, raw IPC,
-> mocking — is still a design sketch, not shipped code; each such example below says so.
-> Feedback on the design, implemented or sketched, is exactly what is wanted right now.
+> payloads for the 16 built-in `TauriEvent`s. Channels (L5) and raw IPC (L6) are implemented
+> too: `invokeChannel` / `createChannel` consume `Channel<T>` as `for await`-able streams
+> (with backpressure), a narrowing helper covers all three `serde` tagged-enum
+> representations, `createRawClient` gives typed raw-body requests, and `BinaryCommand`
+> types commands returning `ArrayBuffer`. Everything past that — mocking, runtime
+> validation, framework integrations — is still a design sketch, not shipped code; each
+> such example below says so. Feedback on the design, implemented or sketched, is exactly
+> what is wanted right now.
 
 **日本語版: [README.ja.md](./README.ja.md)**
 
@@ -95,11 +100,11 @@ and the [Epic issue][epic] for the live checklist.
 | --- | --- | --- |
 | **Transport errors are absent from the types.** Generated code does `catch (e) { if (e instanceof Error) throw e; … }`, so argument-serialization failures, unregistered commands, denied permissions and panics **throw untyped**. Commands that don't return `Result` have no safe path at all. | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*, breaking exhaustive `ts-pattern` matching | **L2** — a `TransportError` discriminated union, a classifier that normalizes raw rejections into it, a `api.safe.*` call site that never throws, and exhaustiveness type tests (issues #9–#12) |
 | **`emitTo` is unavailable.** The generated `makeEvent` exposes `listen` / `once` / `emit` only. | [tauri-specta#187][up187] | **L4 (done)** — typed `emitTo` plus the 6-way `EventTarget` union (issue #19) |
-| **`ipc::Request` / `ipc::Response` unsupported** — headers, raw bodies, `ArrayBuffer` responses. | [tauri-specta#170][up170] (labelled *blocked on other work*) | **L6** — typed raw-body requests and `ArrayBuffer` responses (issues #24–#25) |
+| **`ipc::Request` / `ipc::Response` unsupported** — headers, raw bodies, `ArrayBuffer` responses. | [tauri-specta#170][up170] (labelled *blocked on other work*) | **L6 (done)** — typed raw-body requests and `ArrayBuffer` responses (issues #24–#25) |
 | **No unit-testing story.** Generated commands are const arrow functions bound directly to `__TAURI_INVOKE`, awkward to stub. No fallback for non-Tauri contexts (browser, SSR, Storybook, vitest). | [tauri-specta#197][up197] | **L7** — `createMockClient` with typed handlers, plus a non-Tauri fallback strategy (issues #26–#27) |
 | **Commands live in one flat namespace.** | [tauri-specta#172][up172] | **L1** — TS-side module namespacing on top of the flat command map (issue #8) |
 | **No middleware layer.** Retry, timeout, `AbortSignal` cancellation, logging and in-flight deduplication are hand-rolled per app — the generated code offers no seam to hook into. | structural | **L3** — a middleware pipeline plus `timeout` / `retry` / cancellation / `logger` / dedupe (issues #13–#18) |
-| **Channels are callback-only.** `Channel<T>` drives `onmessage`; no `for await`, no completion or error convention. | `Channel<T>` API shape | **L5** — `AsyncIterable` channels and a tagged-enum narrowing helper (issues #22–#23) |
+| **Channels are callback-only.** `Channel<T>` drives `onmessage`; no `for await`, no completion or error convention. | `Channel<T>` API shape | **L5 (done)** — `AsyncIterable` channels and a tagged-enum narrowing helper (issues #22–#23) |
 | **No runtime validation.** Generated types are compile-time only, so a forgotten regeneration silently drifts from reality. | by design | **L8** — opt-in Standard Schema validation (issue #28) |
 | **No framework integration** (React hooks, Vue composables, TanStack Query). | out of scope upstream | **L9** — React hooks / Vue composables, backed by TanStack Query rather than a bespoke cache (issue #29) |
 
@@ -301,12 +306,63 @@ scope.dispose() // unlistens everything registered through this scope
 await events.on(TauriEvent.WINDOW_RESIZED, (e) => console.log(e.payload.width))
 ```
 
-### 4. Channels as async iterables (not implemented yet — L5)
+### 4. Channels as async iterables (implemented — L5, issue #22)
+
+`Channel<T>` is callback-only and has no notion of "the stream is over", so `invokeChannel`
+ties completion to the owning command's own promise: it ends the stream when that promise
+resolves, and throws when it rejects.
 
 ```ts
-for await (const ev of api.channel<DownloadEvent>('download', { url })) {
+import { invokeChannel } from 'tauri-invoke-binding'
+
+for await (const ev of invokeChannel<DownloadEvent>((channel) =>
+  api.download({ url }, channel),
+)) {
   // ev: DownloadEvent
 }
+```
+
+Backpressure is bounded by `highWaterMark` (default 1024); what happens past the cap is
+`overflow: 'error' | 'drop-oldest' | 'drop-newest'` (default `'error'`). Callback-style
+consumption (`channel.onmessage = ...`) still works — `for await` is additive, not required.
+
+A narrowing helper for Rust tagged enums (`Started` / `Progress` / `Finished`-shaped) ships
+alongside it (issue #23), covering all three `serde` representations:
+
+```ts
+import { matchAdjacentlyTagged } from 'tauri-invoke-binding'
+
+for await (const ev of stream) {
+  matchAdjacentlyTagged('event', 'data', ev, {
+    Started: ({ url }) => console.log('start', url),
+    Progress: ({ chunkLength }) => console.log('chunk', chunkLength),
+    Finished: () => console.log('done'),
+  })
+}
+```
+
+### Raw IPC — `ipc::Request` / `ipc::Response` (implemented — L6, issues #24–#25)
+
+```ts
+import { createRawClient, toUint8Array, type RawCommand } from 'tauri-invoke-binding'
+
+type AppRawCommands = { upload: RawCommand<void, string> }
+const raw = createRawClient<AppRawCommands>()
+await raw.upload(new Uint8Array([1, 2, 3]), { headers: { Authorization: 'key' } })
+```
+
+`RawCommand` is a distinct type from `Command` (JSON args), so passing a JSON args object to
+a raw command — or a raw body to a JSON command — is a type error either way. `tauri::ipc::Response`
+(an `ArrayBuffer` return value) is declared with `BinaryCommand<Args, Err>` and called through
+the ordinary `createClient` / `tauri-specta` adapter:
+
+```ts
+import type { BinaryCommand } from 'tauri-invoke-binding'
+import { toBlob } from 'tauri-invoke-binding'
+
+type AppCommands = { read_file: BinaryCommand<{ path: string }> }
+const buffer = await api.readFile({ path: '/tmp/x' }) // buffer: ArrayBuffer
+const blob = toBlob(buffer, 'application/octet-stream')
 ```
 
 ### 5. Testing (not implemented yet — L7, upstream gap [#197][up197])
@@ -329,8 +385,8 @@ const api = createMockClient<AppCommands>({
 | Middleware (retry/timeout/cancel) | ❌ | ❌ | n/a | ✅ implemented |
 | Mocking / non-Tauri fallback | ❌ ([#197][up197]) | ❌ | n/a | ✅ planned |
 | `emitTo` | ❌ ([#187][up187]) | ✅ | n/a | ✅ implemented |
-| Async-iterable channels | ❌ | ❌ | n/a | ✅ planned |
-| Raw `ipc::Request`/`Response` | ❌ ([#170][up170]) | ❌ | n/a | ✅ planned |
+| Async-iterable channels | ❌ | ❌ | n/a | ✅ implemented |
+| Raw `ipc::Request`/`Response` | ❌ ([#170][up170]) | ❌ | n/a | ✅ implemented |
 | Works *with* the others | — | — | — | ✅ that's the point |
 
 `tauri-specta` and `TauRPC` are good at what they do, and this package is not trying to
@@ -350,8 +406,8 @@ Tracked in the [Epic issue][epic]. Broadly:
 | L2 | Typed transport errors ← the headline feature |
 | L3 | Middleware / interceptors |
 | L4 | Events, incl. `emitTo` ← done |
-| L5 | Async-iterable channels |
-| L6 | Raw IPC |
+| L5 | Async-iterable channels ← done |
+| L6 | Raw IPC ← done |
 | L7 | Mocking and non-Tauri fallback |
 | L8 | Opt-in runtime validation (Standard Schema) |
 | L9 | React / Vue integration, examples |
