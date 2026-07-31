@@ -87,6 +87,13 @@ export type NamespacedClient<
  * always resolve to the reserved accessor. `createClient` does guard the one
  * case it can detect cheaply — a namespace key of `"safe"` — but a
  * command-level collision is left to the caller to avoid.
+ *
+ * `then` is reserved too, for a harder reason: it is not this package's
+ * choice but the language's. Any object with a callable `then` is a thenable,
+ * so a client that answered `.then` with an invoker would hang the moment it
+ * met `await` or `Promise.resolve`. The proxy therefore always reports `then`
+ * as absent — see `buildInvokerProxy`. A command named `then` is
+ * unreachable through this client; call it via `callCommand` directly.
  */
 export type Client<
   TCommands extends CommandMap,
@@ -132,6 +139,18 @@ function buildInvokerProxy(
     get(obj, prop, receiver) {
       if (typeof prop !== 'string') return Reflect.get(obj, prop, receiver)
       if (prop in obj) return Reflect.get(obj, prop, receiver)
+
+      // `then` must stay absent, or the language itself mistakes the client
+      // for a thenable: `await api`, `Promise.resolve(api)`, and returning
+      // the client from an async function all probe `.then`, and a proxy that
+      // answers every property with an invoker would hand one back. The
+      // runtime would then call it as `then(resolve, reject)` — dispatching a
+      // phantom `invoke('then', resolve)` and, because the invoker ignores
+      // the resolve/reject callbacks it was handed, never settling. Awaiting
+      // the client would hang forever. A Rust command genuinely named `then`
+      // is unreachable through this client as a result; `safe` is reserved
+      // the same way (see the doc comment on `Client`).
+      if (prop === 'then') return undefined
 
       let fn = cache.get(prop)
       if (!fn) {

@@ -248,16 +248,23 @@ argument/return-type inference.
   not, because retrying them either can't succeed (a missing command doesn't appear on
   a retry) or risks running a side-effecting command twice. Override per call with
   `{ retry: { shouldRetry, times, backoff } }`, or disable with `{ retry: false }`.
-- **`logger(options?)`** — logs command, (masked) args, duration, and outcome. Disabled
-  by default when `process.env.NODE_ENV === 'production'` (args can carry personal or
-  credential data); mask sensitive keys with `{ mask: ['password'] }` or a custom
-  function. Sink and duration hook are both replaceable.
+- **`logger(options?)`** — logs command, (masked) args, duration, and outcome. Mask
+  sensitive keys with `{ mask: ['password'] }` or a custom function. Sink and duration
+  hook are both replaceable, and a callback that throws can never change a call's
+  outcome — observability must not alter what it observes. Disabled by default when
+  `process.env.NODE_ENV === 'production'`, but **pass `enabled` explicitly in a
+  frontend bundle**: `NODE_ENV` is a Node concept, and if your bundler didn't
+  substitute it the default falls to *enabled*, which is the unsafe direction. With
+  `enabled: import.meta.env.DEV` (Vite) the bundler can also drop the middleware from
+  the production bundle entirely.
 - **`dedupe(options?)`** — merges concurrent calls to the same command with the same
   args (order-independent key) into a single in-flight `invoke`. **Opt-in per
   call/command** (`{ dedupe: true }`) — merging calls to a side-effecting command is
   dangerous, so it's off by default. This is in-flight merging, not a result cache:
   once a call settles it's gone from the map, so the next call always triggers a fresh
-  `invoke`.
+  `invoke`. Cancellation stays per caller: the shared call is not tied to whichever
+  caller started it, so one caller aborting rejects only that caller while the others
+  still receive the real result.
 
 **`AbortSignal` cancellation** is core, not a middleware — every call accepts `signal`
 regardless of what middleware is installed. An already-aborted signal aborts

@@ -1,3 +1,4 @@
+import { raceAbort } from '../internal/abort.js'
 import { stableKey } from '../internal/stable-key.js'
 import type { Invoker, Middleware } from './pipeline.js'
 
@@ -30,6 +31,24 @@ function defaultKeyFn(command: string, args: unknown): string {
  * This is in-flight de-duplication only, not a result cache: as soon as a
  * call settles it's removed from the map, so the next call — even with
  * identical args — always triggers a fresh `invoke`.
+ *
+ * **Cancellation is per caller, not per shared call.** Merged callers each
+ * bring their own `AbortSignal`, so the shared call cannot be tied to any one
+ * of them: it runs with no signal at all, and every caller instead races its
+ * own signal against the shared result. One caller aborting therefore rejects
+ * only that caller — the others keep waiting and still receive the real
+ * result. (Naively passing the first caller's `ctx` straight through would
+ * have let whoever happened to arrive first cancel everyone else's call, and
+ * would have silently ignored every later caller's signal entirely.)
+ *
+ * The corollary is that an abort never stops the underlying `invoke` — the
+ * same constraint that applies everywhere else in this package, and doubly so
+ * here, since other callers may still be waiting on it.
+ *
+ * Note that the key covers only the command and its args: two callers that
+ * merge may have passed *different* `CallOptions` (a different `timeoutMs`,
+ * say), and the shared call runs with whichever caller's options started it.
+ * Only `signal` is isolated per caller.
  */
 export function dedupe(options: DedupeOptions = {}): Middleware {
   const keyFn = options.keyFn ?? defaultKeyFn
@@ -40,14 +59,17 @@ export function dedupe(options: DedupeOptions = {}): Middleware {
       if (!ctx.callOptions.dedupe) return next(ctx)
 
       const key = keyFn(ctx.command, ctx.args)
-      const existing = inFlight.get(key)
-      if (existing) return existing
+      let shared = inFlight.get(key)
 
-      const call = next(ctx).finally(() => {
-        inFlight.delete(key)
-      })
-      inFlight.set(key, call)
-      return call
+      if (!shared) {
+        const { signal: _ignoredCallOptionsSignal, ...callOptions } = ctx.callOptions
+        shared = next({ ...ctx, signal: undefined, callOptions }).finally(() => {
+          inFlight.delete(key)
+        })
+        inFlight.set(key, shared)
+      }
+
+      return raceAbort(shared, ctx.signal, ctx.command)
     }
   }
 }

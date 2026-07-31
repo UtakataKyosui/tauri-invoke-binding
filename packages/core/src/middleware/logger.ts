@@ -17,7 +17,16 @@ export interface LoggerOptions {
   /** Whether the middleware logs at all. Defaults to `false` in a production
    * build (`process.env.NODE_ENV === 'production'`) and `true` otherwise —
    * issue #17's "本番ビルドでは既定で無効にする。引数に個人情報や認証情報が
-   * 含まれうるため". Set explicitly to override either way. */
+   * 含まれうるため". Set explicitly to override either way.
+   *
+   * **Pass this explicitly in a frontend bundle.** The auto-detection reads
+   * `process.env.NODE_ENV`, which is a Node concept: in a Tauri webview it
+   * exists only if the bundler substituted it at build time. If it did not,
+   * detection cannot see a production build and the default falls to
+   * *enabled* — the unsafe direction, since args may carry personal or
+   * credential data. `enabled: import.meta.env.DEV` (Vite) or an equivalent
+   * build-time constant removes the guesswork, and lets the bundler drop this
+   * middleware from the production bundle entirely. */
   enabled?: boolean
   /** Where entries go. Defaults to `console.log`/`console.error` depending on
    * `status`. */
@@ -92,26 +101,55 @@ export function logger(options: LoggerOptions = {}): Middleware {
       ? options.mask
       : (_command: string, args: unknown) => (maskKeys ? maskDeep(args, maskKeys) : args)
 
+  /**
+   * Observability must never change what it observes. A `sink`, `mask`, or
+   * `onDuration` supplied by the caller is arbitrary user code that can throw
+   * — and if it did, a successful call would start rejecting, and a failing
+   * one would report the sink's error instead of the real transport failure.
+   * Every callback is therefore isolated: a throw here is swallowed rather
+   * than allowed to reach the call site.
+   */
+  function report(entry: LogEntry): void {
+    try {
+      sink(entry)
+    } catch {
+      // A broken log sink is not the call's problem.
+    }
+    try {
+      options.onDuration?.({ command: entry.command, ms: entry.ms, status: entry.status })
+    } catch {
+      // Likewise for a broken metrics hook.
+    }
+  }
+
+  function maskArgs(command: string, args: unknown): unknown {
+    try {
+      return maskFn(command, args)
+    } catch {
+      // A mask function that throws must not leak the unmasked args as a
+      // fallback — that is exactly what it was installed to prevent.
+      return '<masking failed>'
+    }
+  }
+
   return (next: Invoker): Invoker => {
     return async (ctx) => {
       const start = now()
       try {
         const result = await next(ctx)
         const ms = now() - start
-        sink({ command: ctx.command, args: maskFn(ctx.command, ctx.args), status: 'ok', ms })
-        options.onDuration?.({ command: ctx.command, ms, status: 'ok' })
+        report({ command: ctx.command, args: maskArgs(ctx.command, ctx.args), status: 'ok', ms })
         return result
       } catch (reason) {
         const ms = now() - start
         const kind = classifyForMiddleware(reason, ctx.command).kind
-        sink({
+        report({
           command: ctx.command,
-          args: maskFn(ctx.command, ctx.args),
+          args: maskArgs(ctx.command, ctx.args),
           status: 'error',
           ms,
           kind,
         })
-        options.onDuration?.({ command: ctx.command, ms, status: 'error' })
         throw reason
       }
     }

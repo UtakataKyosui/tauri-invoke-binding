@@ -91,7 +91,16 @@ function isResultLike(value: unknown): value is ResultLike<unknown, unknown> {
  * `generated.length` is the generated function's real, fixed arity (it's a
  * concrete function, not a type-erased declaration), so any argument past
  * that position is unambiguously the trailing options object rather than a
- * guess.
+ * guess. Crucially the split is arity-driven, never shape-driven — a command
+ * whose own payload happens to look like `CallOptions` (say, one taking a
+ * `{ signal }` object) is still passed through as args.
+ *
+ * The one shape `Function.length` cannot describe is a parameter list with
+ * defaults or a rest element: `(a, b = 1) => …` reports a length of 1, so a
+ * genuine second argument would be mistaken for `CallOptions`. `tauri-specta`
+ * does not generate either form — every generated command has a flat list of
+ * required positional parameters — so this is a constraint on hand-rolled
+ * objects passed to this adapter rather than on real generated bindings.
  */
 function splitCallArgs(
   generated: (...args: unknown[]) => Promise<unknown>,
