@@ -124,3 +124,61 @@ describe('createClient namespacing runtime behavior (issue #8)', () => {
     )
   })
 })
+
+describe('createClient middleware wiring (issue #13/#16)', () => {
+  it('applies configured middleware to every call, in order', async () => {
+    mockRawInvoke.mockResolvedValue('hi Tauri')
+    const log: string[] = []
+    const tag =
+      (name: string): import('../src/middleware/index.js').Middleware =>
+      (next) =>
+      async (ctx) => {
+        log.push(name)
+        return next(ctx)
+      }
+    const api = createClient<AppCommands>({ middleware: [tag('A'), tag('B')] })
+
+    await api.helloWorld({ myName: 'Tauri' })
+    expect(log).toEqual(['A', 'B'])
+  })
+
+  it('passes a per-call signal through to the underlying invoke race', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const api = createClient<AppCommands>()
+
+    await expect(
+      api.helloWorld({ myName: 'x' }, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(mockRawInvoke).not.toHaveBeenCalled()
+  })
+
+  it('merges commandOptions defaults with call-site CallOptions, call site winning', async () => {
+    mockRawInvoke.mockResolvedValue('ok')
+    let seenOptions: unknown
+    const capture: import('../src/middleware/index.js').Middleware = (next) => async (ctx) => {
+      seenOptions = ctx.callOptions
+      return next(ctx)
+    }
+    const api = createClient<AppCommands>({
+      middleware: [capture],
+      commandOptions: { hello_world: { timeoutMs: 1_000, dedupe: true } },
+    })
+
+    await api.helloWorld({ myName: 'x' }, { timeoutMs: 5_000 })
+    expect(seenOptions).toMatchObject({ timeoutMs: 5_000, dedupe: true })
+  })
+
+  it('gives the .safe accessor the same middleware pipeline as the throwing accessor', async () => {
+    mockRawInvoke.mockRejectedValue(new TypeError('boom'))
+    const log: string[] = []
+    const tag: import('../src/middleware/index.js').Middleware = (next) => async (ctx) => {
+      log.push(ctx.command)
+      return next(ctx)
+    }
+    const api = createClient<AppCommands>({ middleware: [tag] })
+
+    await api.safe.helloWorld({ myName: 'x' })
+    expect(log).toEqual(['hello_world'])
+  })
+})

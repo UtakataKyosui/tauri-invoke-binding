@@ -3,10 +3,11 @@
 > **ステータス: pre-alpha — npm には未公開です。**
 > コア層は実装・テスト済みです：`createClient`（手書き `CommandMap`）、`tauri-specta` アダプタ
 > （`tauri-invoke-binding/specta`）、`TransportError`、絶対に throw しない `.safe.*` 呼び出し口
-> （ロードマップ L1/L2 — [Epic][epic]）。名前空間化（L1）も入っています。それ以外 —
-> ミドルウェア／キャンセル・イベント・チャネル・raw IPC・モック — はまだ設計スケッチで、
-> 動くコードではありません。該当する例にはその旨を明記しています。実装済み・スケッチのどちら
-> についても、設計へのフィードバックはいま一番ほしいものです。
+> （ロードマップ L1/L2 — [Epic][epic]）。名前空間化（L1）も入っています。ミドルウェアパイプライン
+> と `AbortSignal` によるキャンセル（L3）も実装済みです：`timeout` / `retry` / `logger` / `dedupe`、
+> および全呼び出しでの `signal` 対応。それ以外 — イベント・チャネル・raw IPC・モック — はまだ
+> 設計スケッチで、動くコードではありません。該当する例にはその旨を明記しています。実装済み・
+> スケッチのどちらについても、設計へのフィードバックはいま一番ほしいものです。
 
 **English: [README.md](./README.md)**
 
@@ -195,17 +196,74 @@ if (r.status === 'ok') {
 }
 ```
 
-### 2. キャンセルとミドルウェア（未実装 — [#16][i16]）
+### 2. キャンセルとミドルウェア（実装済み — [L3][i13]）
+
+生成されるすべての呼び出し口（`createClient`・`.safe`・`tauri-specta` アダプタ）は、
+末尾に `CallOptions` を受け取れます：`signal`、およびクライアントに設定した
+ミドルウェアが読む値（`timeoutMs`・`retry`・`dedupe`）です。
 
 ```ts
-await api.hasError({ signal: AbortSignal.timeout(1_000) })
+import { createClient, timeout, retry, logger } from 'tauri-invoke-binding'
+
+const api = createClient<AppCommands>({
+  middleware: [timeout(5_000), retry({ times: 3 }), logger()],
+})
+
+await api.hasError(undefined, { signal: AbortSignal.timeout(1_000) })
+await api.helloWorld({ myName: 'Tauri' }, { signal: controller.signal })
 ```
 
-ここまでで実装済みの v0.1 の呼び出し口（`createClient`・`.safe`・`tauri-specta`
-アダプタ）は、セクション1で示した引数だけを取り、末尾の `options` 引数はありません。
-「options オブジェクトなのか実引数なのか」を実行時のスキーマなしで汎用的に判別する
-仕組みは #16 のミドルウェア実装が必要なので、上の呼び出し形は「それが入ったときの
-想定」であって、現時点で動くものではありません。
+**引数なしコマンドで `undefined` が要る理由。** 手書き DSL（`createClient`）には実行時
+スキーマがなく、呼び出し側の唯一の引数が「本物のコマンド引数」なのか `CallOptions`
+なのかを、オブジェクトの形から推測することはできません。推測に頼る代わりに、`args`
+は常に専用の引数位置を持ち（`void` 引数のコマンドでは `undefined`）、`options` は常に
+その次の位置に置く設計にしました：`api.ping()` と `api.ping(undefined, { signal })`
+はどちらも型チェックを通り、`api.ping({ signal })` は型エラーになります。`tauri-specta`
+アダプタにはこの曖昧さがありません — 生成された関数の実際のアリティ（`fn.length`）から、
+どこまでが位置引数でどこからが `CallOptions` かを一意に判定できるため、
+`api.helloWorld('Tauri', { signal })` はそのまま動きます。
+
+**ミドルウェア**（`Middleware = (next: Invoker) => Invoker`）は、渡した順に呼び出しを
+包みます：`middleware[0]` の「before」ロジック（`next` を呼ぶ前の処理）が最初に実行され、
+「after」／エラー処理ロジック（`next` の解決後・例外後の処理）は最後に実行されます —
+典型的な onion モデルです。ミドルウェアを追加しても、各コマンド自身の引数・戻り値の型
+推論は変わりません。
+
+- **`timeout(ms)`** — `ms` 以内に解決しなければそのコマンド呼び出しを失敗させ、`.safe`
+  経路では `{ kind: 'timeout', command, ms }` として観測できます。**Tauri の IPC 自体は
+  キャンセルできません**：Rust 側のハンドラは中断されずそのまま走り続けます。これは
+  あくまで TS 側が待つのをやめるだけであり、遅れて届いた結果は処理されず捨てられます。
+  `{ timeoutMs }` でコマンド単位・呼び出し単位に上書きできます。
+- **`retry({ times, backoff?, shouldRetry? })`** — 既定は指数バックオフ + ジッターです。
+  既定でリトライするのは `TransportError` の `unknown` 種別のみです。`command-not-found`・
+  `deserialization`・`permission-denied`・`aborted`・`timeout`・`not-in-tauri`、および
+  Rust コマンド自身が宣言した `Err(E)`（`kind: 'command'`）はリトライしません — これらは
+  リトライしても成功し得ない（存在しないコマンドは再試行しても現れない）か、副作用のある
+  コマンドを二重に実行してしまう危険があるためです。`{ retry: { shouldRetry, times, backoff } }`
+  で呼び出し単位に上書き、`{ retry: false }` で無効化できます。
+- **`logger(options?)`** — コマンド名・（マスク済みの）引数・所要時間・結果を出力します。
+  `{ mask: ['password'] }` やカスタム関数で機微なキーをマスクできます。出力先・所要時間
+  フックともに差し替え可能で、それらのコールバックが例外を投げても呼び出しの結果は
+  変わりません（観測が観測対象を変えてはいけないため）。`process.env.NODE_ENV ===
+  'production'` のときは既定で無効ですが、**フロントエンドのバンドルでは `enabled` を
+  明示的に渡してください**：`NODE_ENV` は Node の概念であり、バンドラが置換していなければ
+  検出できず、既定は「有効」— 危険な側に倒れます。`enabled: import.meta.env.DEV`（Vite）
+  のようにビルド時定数を渡せば、本番バンドルからこのミドルウェアごと削除できます。
+- **`dedupe(options?)`** — 同一コマンド・同一引数（キー順序に依存しない）の同時呼び出しを
+  1 本の in-flight `invoke` にまとめます。**呼び出し単位・コマンド単位のオプトイン**
+  （`{ dedupe: true }`）— 副作用のあるコマンドをまとめるのは危険なので既定は無効です。
+  これはキャッシュではなく in-flight の合流にすぎません：呼び出しが完了すればすぐに
+  マップから外れるので、次の呼び出しは常に新しい `invoke` を発火します。キャンセルは
+  呼び出し元ごとに独立しています：共有された呼び出しは最初の呼び出し元に紐づかないため、
+  ある呼び出し元が abort しても、その呼び出し元だけが reject され、他の呼び出し元は
+  本来の結果を受け取ります。
+
+**`AbortSignal` によるキャンセル**はミドルウェアではなくコア機能です — どのミドルウェアを
+設定していても、すべての呼び出しが `signal` を受け付けます。すでに abort 済みの signal は
+`invoke` を呼ぶ前に即座に中断し、実行中に abort された場合は結果を処理せず破棄します
+（`.safe` 経路は `{ kind: 'aborted' }` で解決、通常経路は `AbortError` を throw）。`retry`
+のバックオフ待機中の abort も即座に中断します。**Tauri の IPC 自体はキャンセルできません**
+— `timeout` と同じ制約で、Rust 側のハンドラは中断されずそのまま走り続けます。
 
 ### 3. `emitTo`（未実装 — L4、上流の穴 [#187][up187]）
 
@@ -238,7 +296,7 @@ const api = createMockClient<AppCommands>({
 | Rust から TS 型を生成 | ✅ | ✅ | ✅（型のみ） | ❌ **意図的に** |
 | Rust 側の変更が必要 | proc-macro | trait マクロ | derive | **不要** |
 | 型付きトランスポートエラー | ❌（[#169][up169]） | ❌ | — | ✅ 予定 |
-| ミドルウェア（retry/timeout/cancel） | ❌ | ❌ | — | ✅ 予定 |
+| ミドルウェア（retry/timeout/cancel） | ❌ | ❌ | — | ✅ 実装済み |
 | モック・非 Tauri フォールバック | ❌（[#197][up197]） | ❌ | — | ✅ 予定 |
 | `emitTo` | ❌（[#187][up187]） | ✅ | — | ✅ 予定 |
 | AsyncIterable なチャネル | ❌ | ❌ | — | ✅ 予定 |
@@ -299,4 +357,5 @@ pnpm add tauri-invoke-binding   # リリース後
 [up197]: https://github.com/specta-rs/tauri-specta/issues/197
 [epic]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/1
 [epic-l10]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/31
+[i13]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/13
 [i16]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/16

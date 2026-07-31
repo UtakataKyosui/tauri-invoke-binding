@@ -34,6 +34,11 @@ export type TransportError =
    * race against the signal), not by inspecting the rejection value — this
    * is the one kind that needs no heuristic at all. */
   | { kind: 'aborted' }
+  /** The `timeout` middleware's deadline elapsed before the command
+   * resolved. Detected by this package itself, not a heuristic. Rust-side
+   * processing is *not* stopped by this — see the `timeout` middleware's
+   * doc comment (issue #14). */
+  | { kind: 'timeout'; command: string; ms: number }
   /** Called outside a Tauri webview (browser, SSR, Storybook, plain vitest).
    * Detected before `invoke` is even called — see `isTauriEnvironment` in
    * internal/tauri.ts — so this is also not a heuristic. */

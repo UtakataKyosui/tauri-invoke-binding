@@ -4,9 +4,11 @@
 > The core layer is implemented and tested: `createClient` (hand-written `CommandMap`),
 > the `tauri-specta` adapter (`tauri-invoke-binding/specta`), `TransportError`, and the
 > never-throws `.safe.*` call site (roadmap L1/L2 — [Epic][epic]). Namespacing (L1) is in
-> too. Everything past that — middleware/cancellation, events, channels, raw IPC, mocking
-> — is still a design sketch, not shipped code; each such example below says so. Feedback
-> on the design, implemented or sketched, is exactly what is wanted right now.
+> too. The middleware pipeline and `AbortSignal` cancellation (L3) are also implemented:
+> `timeout`, `retry`, `logger`, and `dedupe`, plus `signal` on every call. Everything past
+> that — events, channels, raw IPC, mocking — is still a design sketch, not shipped code;
+> each such example below says so. Feedback on the design, implemented or sketched, is
+> exactly what is wanted right now.
 
 **日本語版: [README.ja.md](./README.ja.md)**
 
@@ -201,18 +203,76 @@ if (r.status === 'ok') {
 }
 ```
 
-### 2. Cancellation and middleware (not implemented yet — [#16][i16])
+### 2. Cancellation and middleware (implemented — [L3][i13])
+
+Every generated call site — `createClient`, `.safe`, and the `tauri-specta` adapter —
+accepts a trailing `CallOptions`: `signal`, plus whatever a middleware installed on
+the client reads off it (`timeoutMs`, `retry`, `dedupe`).
 
 ```ts
-await api.hasError({ signal: AbortSignal.timeout(1_000) })
+import { createClient, timeout, retry, logger } from 'tauri-invoke-binding'
+
+const api = createClient<AppCommands>({
+  middleware: [timeout(5_000), retry({ times: 3 }), logger()],
+})
+
+await api.hasError(undefined, { signal: AbortSignal.timeout(1_000) })
+await api.helloWorld({ myName: 'Tauri' }, { signal: controller.signal })
 ```
 
-The v0.1 call sites shipped so far (`createClient`, `.safe`, the `tauri-specta`
-adapter) take exactly the arguments shown in section 1 — no trailing
-`options` parameter. Adding one generically, without a runtime schema to
-tell an options object apart from a real args object, needs the middleware
-work tracked in issue #16; the calling convention above is what it's
-expected to look like once that lands, not what exists today.
+**Why `undefined` for a no-args command.** The hand-written DSL (`createClient`) has
+no runtime schema — its dispatch proxy can't tell whether a lone argument at the call
+site is "real" command args or `CallOptions` without guessing from the object's shape.
+Rather than guess, `args` is always its own parameter position (`undefined` for a
+`void`-args command) and `options` is always the position after it: `api.ping()` and
+`api.ping(undefined, { signal })` both type-check; `api.ping({ signal })` is a type
+error. The `tauri-specta` adapter doesn't have this ambiguity — the generated function's
+real arity (`fn.length`) tells it unambiguously where positional args end and
+`CallOptions` begins, so `api.helloWorld('Tauri', { signal })` just works.
+
+**Middleware** (`Middleware = (next: Invoker) => Invoker`) wraps calls in the order
+given: `middleware[0]`'s "before" logic (anything before it calls `next`) runs first,
+and its "after"/error-handling logic (anything after `next` resolves or throws) runs
+last — the classic onion model. Adding middleware never changes a command's own
+argument/return-type inference.
+
+- **`timeout(ms)`** — fails the call after `ms` if it hasn't resolved, surfaced as
+  `{ kind: 'timeout', command, ms }` on the `.safe` path. **Tauri's IPC cannot be
+  cancelled**: the Rust-side handler keeps running to completion regardless; this only
+  stops the TS side from waiting, and a late result is discarded, not acted on.
+  Override per call/command with `{ timeoutMs }`.
+- **`retry({ times, backoff?, shouldRetry? })`** — exponential backoff with jitter by
+  default. Only the `unknown` `TransportError` kind is retried by default —
+  `command-not-found`, `deserialization`, `permission-denied`, `aborted`, `timeout`,
+  `not-in-tauri`, and the Rust command's own declared `Err(E)` (`kind: 'command'`) are
+  not, because retrying them either can't succeed (a missing command doesn't appear on
+  a retry) or risks running a side-effecting command twice. Override per call with
+  `{ retry: { shouldRetry, times, backoff } }`, or disable with `{ retry: false }`.
+- **`logger(options?)`** — logs command, (masked) args, duration, and outcome. Mask
+  sensitive keys with `{ mask: ['password'] }` or a custom function. Sink and duration
+  hook are both replaceable, and a callback that throws can never change a call's
+  outcome — observability must not alter what it observes. Disabled by default when
+  `process.env.NODE_ENV === 'production'`, but **pass `enabled` explicitly in a
+  frontend bundle**: `NODE_ENV` is a Node concept, and if your bundler didn't
+  substitute it the default falls to *enabled*, which is the unsafe direction. With
+  `enabled: import.meta.env.DEV` (Vite) the bundler can also drop the middleware from
+  the production bundle entirely.
+- **`dedupe(options?)`** — merges concurrent calls to the same command with the same
+  args (order-independent key) into a single in-flight `invoke`. **Opt-in per
+  call/command** (`{ dedupe: true }`) — merging calls to a side-effecting command is
+  dangerous, so it's off by default. This is in-flight merging, not a result cache:
+  once a call settles it's gone from the map, so the next call always triggers a fresh
+  `invoke`. Cancellation stays per caller: the shared call is not tied to whichever
+  caller started it, so one caller aborting rejects only that caller while the others
+  still receive the real result.
+
+**`AbortSignal` cancellation** is core, not a middleware — every call accepts `signal`
+regardless of what middleware is installed. An already-aborted signal aborts
+immediately, before `invoke` is even called; aborting mid-flight discards the eventual
+result rather than acting on it (rejecting the `.safe` path with `{ kind: 'aborted' }`,
+throwing `AbortError` on the throwing path); an abort during `retry`'s backoff wait
+interrupts immediately instead of waiting it out. **Tauri's IPC cannot be cancelled** —
+same caveat as `timeout` — the Rust-side handler keeps running regardless.
 
 ### 3. `emitTo` (not implemented yet — L4, upstream gap [#187][up187])
 
@@ -245,7 +305,7 @@ const api = createMockClient<AppCommands>({
 | Generates TS types from Rust | ✅ | ✅ | ✅ (types only) | ❌ **by design** |
 | Requires Rust-side changes | proc-macro | trait macros | derive | **none** |
 | Typed transport errors | ❌ ([#169][up169]) | ❌ | n/a | ✅ planned |
-| Middleware (retry/timeout/cancel) | ❌ | ❌ | n/a | ✅ planned |
+| Middleware (retry/timeout/cancel) | ❌ | ❌ | n/a | ✅ implemented |
 | Mocking / non-Tauri fallback | ❌ ([#197][up197]) | ❌ | n/a | ✅ planned |
 | `emitTo` | ❌ ([#187][up187]) | ✅ | n/a | ✅ planned |
 | Async-iterable channels | ❌ | ❌ | n/a | ✅ planned |
@@ -306,4 +366,5 @@ worth more than code.
 [up197]: https://github.com/specta-rs/tauri-specta/issues/197
 [epic]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/1
 [epic-l10]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/31
+[i13]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/13
 [i16]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/16

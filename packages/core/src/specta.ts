@@ -13,9 +13,17 @@
  * Event support (`events`, `emitTo`, ...) is out of scope here — that's
  * issues #18–#21 (L4). This module only adapts commands.
  */
-import { classifyRejection } from './classify.js'
+
 import type { FlatClient, SafeClient } from './client.js'
 import type { Command, CommandArgsShape } from './command.js'
+import { raceAbort, throwIfAborted } from './internal/abort.js'
+import { classifyForMiddleware } from './internal/classify-for-middleware.js'
+import {
+  type CallOptions,
+  composeMiddleware,
+  type Invoker,
+  type Middleware,
+} from './middleware/pipeline.js'
 import { err, ok, type Result } from './result.js'
 import type { SafeError } from './transport-error.js'
 
@@ -55,6 +63,18 @@ export type InferCommands<T> = {
 // biome-ignore lint/suspicious/noExplicitAny: matches the shape tauri-specta actually generates — arbitrary positional params, arbitrary return type
 type GeneratedCommands = Record<string, (...args: any[]) => Promise<unknown>>
 
+export interface CreateSpectaClientOptions {
+  /** Middleware applied to every call through this client — same semantics
+   * as `CreateClientOptions.middleware` in client.ts (issue #13). */
+  middleware?: readonly Middleware[]
+  /** Per-command `CallOptions` defaults, keyed by the generated bindings
+   * object's own key (the same camelCase name used at the call site, since
+   * `tauri-specta`'s generated object has no separate wire name to key by).
+   * Shallow-merged under whatever the caller passes at the call site, which
+   * always wins. */
+  commandOptions?: Record<string, CallOptions>
+}
+
 function isResultLike(value: unknown): value is ResultLike<unknown, unknown> {
   return (
     typeof value === 'object' &&
@@ -62,6 +82,35 @@ function isResultLike(value: unknown): value is ResultLike<unknown, unknown> {
     'status' in value &&
     (value.status === 'ok' || value.status === 'error')
   )
+}
+
+/**
+ * Splits the raw arguments a call site passed into the generated function's
+ * real positional args and an optional trailing `CallOptions`. Unlike the
+ * hand-written DSL (client.ts), this can be done unambiguously at runtime:
+ * `generated.length` is the generated function's real, fixed arity (it's a
+ * concrete function, not a type-erased declaration), so any argument past
+ * that position is unambiguously the trailing options object rather than a
+ * guess. Crucially the split is arity-driven, never shape-driven — a command
+ * whose own payload happens to look like `CallOptions` (say, one taking a
+ * `{ signal }` object) is still passed through as args.
+ *
+ * The one shape `Function.length` cannot describe is a parameter list with
+ * defaults or a rest element: `(a, b = 1) => …` reports a length of 1, so a
+ * genuine second argument would be mistaken for `CallOptions`. `tauri-specta`
+ * does not generate either form — every generated command has a flat list of
+ * required positional parameters — so this is a constraint on hand-rolled
+ * objects passed to this adapter rather than on real generated bindings.
+ */
+function splitCallArgs(
+  generated: (...args: unknown[]) => Promise<unknown>,
+  rawArgs: unknown[],
+): { positional: unknown[]; options: CallOptions | undefined } {
+  const arity = generated.length
+  if (rawArgs.length > arity) {
+    return { positional: rawArgs.slice(0, arity), options: rawArgs[arity] as CallOptions }
+  }
+  return { positional: rawArgs, options: undefined }
 }
 
 /**
@@ -80,19 +129,43 @@ function isResultLike(value: unknown): value is ResultLike<unknown, unknown> {
  */
 export function createClient<T extends GeneratedCommands>(
   commands: T,
+  options?: CreateSpectaClientOptions,
 ): FlatClient<InferCommands<T>> & { safe: SafeClient<InferCommands<T>> } {
   const flat: Record<string, unknown> = {}
   const safe: Record<string, unknown> = {}
+  const commandOptions = options?.commandOptions
 
   for (const key of Object.keys(commands)) {
     const generated = commands[key]
     if (!generated) continue
 
-    flat[key] = (...args: unknown[]) => generated(...args)
+    // Same signal handling as the hand-written client's `baseInvoker`
+    // (call.ts): an already-aborted signal never even reaches `generated`,
+    // and once aborted mid-flight the eventual result is discarded — issue
+    // #16 applies to every client this package builds, not just the
+    // hand-written DSL.
+    const baseInvoker: Invoker = async (ctx) => {
+      throwIfAborted(ctx.signal, ctx.command)
+      return raceAbort(generated(...(ctx.args as unknown[])), ctx.signal, ctx.command)
+    }
+    const pipeline = composeMiddleware(options?.middleware ?? [])(baseInvoker)
 
-    safe[key] = async (...args: unknown[]): Promise<Result<unknown, SafeError<unknown>>> => {
+    flat[key] = (...rawArgs: unknown[]) => {
+      const { positional, options: callSiteOptions } = splitCallArgs(generated, rawArgs)
+      const callOptions: CallOptions = { ...commandOptions?.[key], ...callSiteOptions }
+      return pipeline({ command: key, args: positional, signal: callOptions.signal, callOptions })
+    }
+
+    safe[key] = async (...rawArgs: unknown[]): Promise<Result<unknown, SafeError<unknown>>> => {
+      const { positional, options: callSiteOptions } = splitCallArgs(generated, rawArgs)
+      const callOptions: CallOptions = { ...commandOptions?.[key], ...callSiteOptions }
       try {
-        const resolved = await generated(...args)
+        const resolved = await pipeline({
+          command: key,
+          args: positional,
+          signal: callOptions.signal,
+          callOptions,
+        })
         if (isResultLike(resolved)) {
           return resolved.status === 'ok'
             ? ok(resolved.data)
@@ -103,10 +176,11 @@ export function createClient<T extends GeneratedCommands>(
         // tauri-specta's own generated code only ever rejects (as opposed to
         // resolving with `{ status: 'error', error }`) for genuine
         // Error-instance transport failures — see the doc comment above and
-        // the issue #10 investigation. classifyRejection never produces a
-        // `'command'` kind, so a caught rejection here never gets
-        // misreported as the command's own declared Err.
-        return err(classifyRejection(reason, { command: key }))
+        // the issue #10 investigation. classifyForMiddleware never produces
+        // a `'command'` kind for an Error/string rejection, so a caught
+        // rejection here never gets misreported as the command's own
+        // declared Err.
+        return err(classifyForMiddleware(reason, key))
       }
     }
   }

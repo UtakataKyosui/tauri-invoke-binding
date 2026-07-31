@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from 'vitest'
 import { createClient } from '../src/client.js'
 import type { Command } from '../src/command.js'
+import type { CallOptions } from '../src/middleware/index.js'
 import type { Result } from '../src/result.js'
 import type { SafeError } from '../src/transport-error.js'
 
@@ -13,17 +14,32 @@ type AppCommands = {
   window_close: Command<void, void>
 }
 
+/** Mirrors the two-call-signature shape `InvokeFn` produces for a `void`-args
+ * command (call.ts) — see its doc comment for why `args` and `options` are
+ * always separate parameter positions instead of overloading one. */
+type VoidInvoke<Ok> = {
+  (): Promise<Ok>
+  (args: undefined, options: CallOptions): Promise<Ok>
+}
+
+type VoidSafeInvoke<Ok, Err> = {
+  (): Promise<Result<Ok, SafeError<Err>>>
+  (args: undefined, options: CallOptions): Promise<Result<Ok, SafeError<Err>>>
+}
+
 describe('createClient (issue #5 — hand-written DSL)', () => {
   it('derives camelCase accessors from snake_case command keys', () => {
     const api = createClient<AppCommands>()
-    expectTypeOf(api.helloWorld).toEqualTypeOf<(args: { myName: string }) => Promise<string>>()
-    expectTypeOf(api.hasError).toEqualTypeOf<() => Promise<string>>()
+    expectTypeOf(api.helloWorld).toEqualTypeOf<
+      (args: { myName: string }, options?: CallOptions) => Promise<string>
+    >()
+    expectTypeOf(api.hasError).toEqualTypeOf<VoidInvoke<string>>()
   })
 
   it('allows calling a no-args command with zero parameters', () => {
     const api = createClient<AppCommands>()
-    expectTypeOf(api.ping).toEqualTypeOf<() => Promise<void>>()
-    // @ts-expect-error - ping takes no arguments
+    expectTypeOf(api.ping).toEqualTypeOf<VoidInvoke<void>>()
+    // @ts-expect-error - ping takes no arguments directly (only `(undefined, options)`)
     api.ping({})
   })
 
@@ -51,11 +67,16 @@ describe('createClient (issue #5 — hand-written DSL)', () => {
     api.helloWorld({ myName: 123 })
   })
 
+  it('accepts a trailing CallOptions (issue #16 — signal, and whatever a middleware reads)', () => {
+    const api = createClient<AppCommands>()
+    const controller = new AbortController()
+    api.helloWorld({ myName: 'x' }, { signal: controller.signal, timeoutMs: 1_000 })
+    api.ping(undefined, { signal: controller.signal })
+  })
+
   it('exposes a .safe accessor for every command, returning a Result', () => {
     const api = createClient<AppCommands>()
-    expectTypeOf(api.safe.hasError).toEqualTypeOf<
-      () => Promise<Result<string, SafeError<number>>>
-    >()
+    expectTypeOf(api.safe.hasError).toEqualTypeOf<VoidSafeInvoke<string, number>>()
   })
 })
 
@@ -65,23 +86,27 @@ describe('createClient namespacing (issue #8)', () => {
       namespaces: { fs: 'fs_', window: 'window_' },
     })
 
-    expectTypeOf(api.fs.readFile).toEqualTypeOf<(args: { path: string }) => Promise<string>>()
-    expectTypeOf(api.fs.writeFile).toEqualTypeOf<
-      (args: { path: string; contents: string }) => Promise<void>
+    expectTypeOf(api.fs.readFile).toEqualTypeOf<
+      (args: { path: string }, options?: CallOptions) => Promise<string>
     >()
-    expectTypeOf(api.window.close).toEqualTypeOf<() => Promise<void>>()
+    expectTypeOf(api.fs.writeFile).toEqualTypeOf<
+      (args: { path: string; contents: string }, options?: CallOptions) => Promise<void>
+    >()
+    expectTypeOf(api.window.close).toEqualTypeOf<VoidInvoke<void>>()
   })
 
   it('gives each namespace its own .safe accessor', () => {
     const api = createClient<AppCommands, { fs: 'fs_' }>({ namespaces: { fs: 'fs_' } })
     expectTypeOf(api.fs.safe.readFile).toEqualTypeOf<
-      (args: { path: string }) => Promise<Result<string, SafeError<never>>>
+      (args: { path: string }, options?: CallOptions) => Promise<Result<string, SafeError<never>>>
     >()
   })
 
   it('keeps flat top-level access available alongside namespaces', () => {
     const api = createClient<AppCommands, { fs: 'fs_' }>({ namespaces: { fs: 'fs_' } })
-    expectTypeOf(api.helloWorld).toEqualTypeOf<(args: { myName: string }) => Promise<string>>()
+    expectTypeOf(api.helloWorld).toEqualTypeOf<
+      (args: { myName: string }, options?: CallOptions) => Promise<string>
+    >()
   })
 
   it('does not expose a command under a namespace it does not belong to', () => {
