@@ -1,7 +1,19 @@
-import { callCommand, callCommandSafe, type InvokeFn, type SafeInvokeFn } from './call.js'
+import {
+  baseInvoker,
+  callCommand,
+  callCommandSafe,
+  type InvokeFn,
+  type SafeInvokeFn,
+} from './call.js'
 import type { SnakeToCamel } from './casing.js'
 import { camelToSnake } from './casing.js'
 import type { Command, CommandArgs, CommandErr, CommandMap, CommandOk } from './command.js'
+import {
+  type CallOptions,
+  composeMiddleware,
+  type Invoker,
+  type Middleware,
+} from './middleware/pipeline.js'
 
 /**
  * The hand-written DSL's `Args` shape is narrower than `Command`'s general
@@ -89,11 +101,29 @@ export interface CreateClientOptions<Namespaces extends Record<string, string>> 
    * Rust side, e.g. `{ fs: 'fs_' }` exposes `fs_read_file` as
    * `client.fs.readFile`. See issue #8. */
   namespaces?: Namespaces
+  /** Middleware applied to every call through this client, in the order
+   * documented on `composeMiddleware` (issue #13): `middleware[0]` runs its
+   * "before" logic first and its "after"/error-handling logic last. */
+  middleware?: readonly Middleware[]
+  /** Per-command defaults for `CallOptions` (issue #14/#18's "コマンド単位
+   * での...上書き/指定"), keyed by the wire command name (snake_case, the
+   * same name middleware sees as `ctx.command` — not the camelCase accessor
+   * used at the call site). Shallow-merged under whatever the caller passes
+   * at the call site, which always wins. */
+  commandOptions?: Record<string, CallOptions>
+}
+
+function mergeCallOptions(
+  commandOptions: Record<string, CallOptions> | undefined,
+  commandName: string,
+  callSiteOptions: CallOptions | undefined,
+): CallOptions {
+  return { ...commandOptions?.[commandName], ...callSiteOptions }
 }
 
 function buildInvokerProxy(
   toCommandName: (prop: string) => string,
-  invoke: (commandName: string, args: unknown) => unknown,
+  invoke: (commandName: string, args: unknown, options: CallOptions | undefined) => unknown,
 ): Record<string, unknown> {
   const cache = new Map<string, (...args: unknown[]) => unknown>()
   const target: Record<string, unknown> = {}
@@ -106,7 +136,8 @@ function buildInvokerProxy(
       let fn = cache.get(prop)
       if (!fn) {
         const commandName = toCommandName(prop)
-        fn = (...args: unknown[]) => invoke(commandName, args[0])
+        fn = (...args: unknown[]) =>
+          invoke(commandName, args[0], args[1] as CallOptions | undefined)
         cache.set(prop, fn)
       }
       return fn
@@ -114,18 +145,37 @@ function buildInvokerProxy(
   })
 }
 
-function makeFlatInvokers(prefix: string): Record<string, unknown> {
+function makeFlatInvokers(
+  prefix: string,
+  pipeline: Invoker,
+  commandOptions: Record<string, CallOptions> | undefined,
+): Record<string, unknown> {
   return buildInvokerProxy(
     (prop) => prefix + camelToSnake(prop),
-    (commandName, args) => callCommand(commandName, args as Record<string, unknown> | undefined),
+    (commandName, args, options) =>
+      callCommand(
+        commandName,
+        args as Record<string, unknown> | undefined,
+        pipeline,
+        mergeCallOptions(commandOptions, commandName, options),
+      ),
   )
 }
 
-function makeSafeInvokers(prefix: string): Record<string, unknown> {
+function makeSafeInvokers(
+  prefix: string,
+  pipeline: Invoker,
+  commandOptions: Record<string, CallOptions> | undefined,
+): Record<string, unknown> {
   return buildInvokerProxy(
     (prop) => prefix + camelToSnake(prop),
-    (commandName, args) =>
-      callCommandSafe(commandName, args as Record<string, unknown> | undefined),
+    (commandName, args, options) =>
+      callCommandSafe(
+        commandName,
+        args as Record<string, unknown> | undefined,
+        pipeline,
+        mergeCallOptions(commandOptions, commandName, options),
+      ),
   )
 }
 
@@ -164,14 +214,17 @@ export function createClient<
     )
   }
 
-  const client = makeFlatInvokers('')
+  const pipeline = composeMiddleware(options?.middleware ?? [])(baseInvoker)
+  const commandOptions = options?.commandOptions
+
+  const client = makeFlatInvokers('', pipeline, commandOptions)
   // biome-ignore lint/complexity/useLiteralKeys: bracket notation is required here by noPropertyAccessFromIndexSignature (client is Record<string, unknown>)
-  client['safe'] = makeSafeInvokers('')
+  client['safe'] = makeSafeInvokers('', pipeline, commandOptions)
 
   for (const [key, prefix] of Object.entries(namespaces)) {
-    const namespaceClient = makeFlatInvokers(prefix)
+    const namespaceClient = makeFlatInvokers(prefix, pipeline, commandOptions)
     // biome-ignore lint/complexity/useLiteralKeys: bracket notation is required here by noPropertyAccessFromIndexSignature
-    namespaceClient['safe'] = makeSafeInvokers(prefix)
+    namespaceClient['safe'] = makeSafeInvokers(prefix, pipeline, commandOptions)
     client[key] = namespaceClient
   }
 

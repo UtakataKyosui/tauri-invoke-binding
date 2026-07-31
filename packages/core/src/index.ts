@@ -35,6 +35,19 @@ export type {
   CommandMap,
   CommandOk,
 } from './command.js'
+export { AbortError, TimeoutError } from './internal/errors.js'
+export type {
+  CallOptions,
+  DedupeOptions,
+  InvokeContext,
+  Invoker,
+  LogEntry,
+  LoggerOptions,
+  Middleware,
+  RetryOptions,
+  RetryOverride,
+} from './middleware/index.js'
+export { composeMiddleware, dedupe, logger, retry, timeout } from './middleware/index.js'
 export type { Result } from './result.js'
 export { err, isErr, isOk, ok } from './result.js'
 export type { SafeError, TransportError } from './transport-error.js'

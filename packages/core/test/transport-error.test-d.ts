@@ -14,6 +14,8 @@ function handleTransportError(e: TransportError): string {
       return e.message
     case 'aborted':
       return 'aborted'
+    case 'timeout':
+      return `${e.command} ${e.ms}`
     case 'not-in-tauri':
       return 'not-in-tauri'
     case 'unknown':
@@ -35,6 +37,8 @@ function handleTransportErrorMissingCase(e: TransportError): string {
       return e.message
     case 'aborted':
       return 'aborted'
+    case 'timeout':
+      return `${e.command} ${e.ms}`
     case 'not-in-tauri':
       return 'not-in-tauri'
     // 'unknown' intentionally left unhandled
@@ -59,6 +63,8 @@ function handleSafeError<E>(e: SafeError<E>): string {
       return e.message
     case 'aborted':
       return 'aborted'
+    case 'timeout':
+      return `${e.command} ${e.ms}`
     case 'not-in-tauri':
       return 'not-in-tauri'
     case 'unknown':
@@ -75,6 +81,7 @@ function handleWithTsPattern(e: TransportError): string {
     .with({ kind: 'permission-denied' }, (x) => x.message)
     .with({ kind: 'panic' }, (x) => x.message)
     .with({ kind: 'aborted' }, () => 'aborted')
+    .with({ kind: 'timeout' }, (x) => `${x.command} ${x.ms}`)
     .with({ kind: 'not-in-tauri' }, () => 'not-in-tauri')
     .with({ kind: 'unknown' }, (x) => String(x.cause))
     .exhaustive()
