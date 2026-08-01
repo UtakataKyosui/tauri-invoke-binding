@@ -10,10 +10,13 @@
 > スコープ、組み込み `TauriEvent`（16 種）の型付きペイロード。チャネル（L5）と raw IPC（L6）も
 > 実装済みです：`Channel<T>` を `for await` で消費できる `invokeChannel` / `createChannel`
 > （バックプレッシャー付き）、tagged enum の 3 表現に対応したナローイングヘルパー、型付き
-> raw body リクエスト（`createRawClient`）、`ArrayBuffer` を返すコマンドの型付け。それ以外 —
-> モック・実行時検証・フレームワーク統合 — はまだ設計スケッチで、動くコードではありません。
-> 該当する例にはその旨を明記しています。実装済み・スケッチのどちらについても、設計への
-> フィードバックはいま一番ほしいものです。
+> raw body リクエスト（`createRawClient`）、`ArrayBuffer` を返すコマンドの型付け。テスト
+> （L7、`tauri-invoke-binding/testing`）の `createMockClient` も実装済みです：`CommandMap`
+> から型付けされたハンドラ登録、`TransportError` の任意の `kind` を注入できる
+> `mockTransportError`、呼び出し履歴、Tauri なしの vitest での動作。それ以外 — 非 Tauri
+> 環境のフォールバック・実行時検証・フレームワーク統合 — はまだ設計スケッチで、動くコード
+> ではありません。該当する例にはその旨を明記しています。実装済み・スケッチのどちらに
+> ついても、設計へのフィードバックはいま一番ほしいものです。
 
 **English: [README.md](./README.md)**
 
@@ -96,7 +99,7 @@ type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E }
 | **トランスポートエラーが型に現れない。** 生成コードは `catch (e) { if (e instanceof Error) throw e; … }` としているため、引数のシリアライズ失敗・未登録コマンド・権限拒否・パニックは**型なしで throw** されます。`Result` を返さないコマンドに至っては安全な経路が一切ありません。 | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*（`ts-pattern` の網羅マッチが破れる） | **L2** — `TransportError` 判別ユニオン、生の reject 値を正規化する分類ロジック、絶対に throw しない `api.safe.*`、網羅性の型レベルテスト（Issue #9〜#12） |
 | **`emitTo` が使えない。** 生成される `makeEvent` は `listen` / `once` / `emit` のみ。 | [tauri-specta#187][up187] | **L4（完了）** — 型付き `emitTo` と 6 種の `EventTarget` 判別ユニオン（Issue #19） |
 | **`ipc::Request` / `ipc::Response` 非対応** — headers・raw body・`ArrayBuffer` 戻り値。 | [tauri-specta#170][up170]（*blocked on other work* ラベル） | **L6（完了）** — 型付き raw body リクエストと `ArrayBuffer` レスポンス（Issue #24〜#25） |
-| **ユニットテストの手段がない。** 生成物は `__TAURI_INVOKE` に直結した const アロー関数で差し替えにくく、非 Tauri 環境（ブラウザ・SSR・Storybook・vitest）のフォールバックもありません。 | [tauri-specta#197][up197] | **L7** — 型付きハンドラを登録できる `createMockClient` と非 Tauri 環境のフォールバック戦略（Issue #26〜#27） |
+| **ユニットテストの手段がない。** 生成物は `__TAURI_INVOKE` に直結した const アロー関数で差し替えにくく、非 Tauri 環境（ブラウザ・SSR・Storybook・vitest）のフォールバックもありません。 | [tauri-specta#197][up197] | **L7（#26 完了、#27 未実装）** — 型付きハンドラを登録できる `createMockClient` と非 Tauri 環境のフォールバック戦略（Issue #26〜#27） |
 | **コマンドが単一のフラットな名前空間。** | [tauri-specta#172][up172] | **L1** — フラットなコマンドマップの上に TS 側だけで名前空間を切る仕組み（Issue #8） |
 | **ミドルウェア層がない。** リトライ・タイムアウト・`AbortSignal` キャンセル・ロギング・インフライト重複排除は各アプリで手書きになります。生成コードの構造上、差し込み点が存在しません。 | 構造的な理由 | **L3** — ミドルウェアパイプラインと `timeout` / `retry` / キャンセル / `logger` / 重複排除（Issue #13〜#18） |
 | **チャネルが callback のみ。** `Channel<T>` は `onmessage` ベースで、`for await` にできず、完了・エラーの通知規約もありません。 | `Channel<T>` の API 形状 | **L5（完了）** — `AsyncIterable` 化したチャネルと tagged enum のナローイングヘルパー（Issue #22〜#23） |
@@ -361,15 +364,31 @@ const buffer = await api.readFile({ path: '/tmp/x' }) // buffer: ArrayBuffer
 const blob = toBlob(buffer, 'application/octet-stream')
 ```
 
-### 5. テスト（未実装 — L7、上流の穴 [#197][up197]）
+### 5. テスト（`createMockClient` は実装済み — L7、Issue #26、上流の穴 [#197][up197]）
+
+`CommandMap` からハンドラの引数・戻り値が型付けされる、独立実装のモッククライアント。
+`@tauri-apps/api/mocks` の `mockIPC` はラップしない — こちらは `window.__TAURI_INTERNALS__`
+より上のレイヤー、`invoke()` 呼び出しそのものを差し替える：
 
 ```ts
 import { createMockClient } from 'tauri-invoke-binding/testing'
 
 const api = createMockClient<AppCommands>({
-  helloWorld: ({ myName }) => `hi ${myName}`,
+  hello_world: ({ myName }) => `hi ${myName}`,
+  has_error: () => ({ status: 'error', error: 42 }), // commands's own declared Err
 })
+
+await api.helloWorld({ myName: 'Tauri' }) // -> 'hi Tauri'
+await api.safe.hasError() // -> { status: 'error', error: { kind: 'command', value: 42 } }
+api.__mock.calls // 呼び出し履歴
 ```
+
+`mockTransportError` で `TransportError` の任意の `kind` を意図的に発生させられる
+（エラー処理のテスト用）。未登録コマンドの挙動は `unknownCommand: 'throw' | 'command-not-found'`
+で選べる。Tauri なしの vitest で全機能がテストできる。
+
+非 Tauri 環境（ブラウザ/SSR/Storybook）でのフォールバック戦略は **L7 の残り（Issue #27）**
+として未実装。
 
 ## 既存 OSS との比較
 
@@ -379,7 +398,7 @@ const api = createMockClient<AppCommands>({
 | Rust 側の変更が必要 | proc-macro | trait マクロ | derive | **不要** |
 | 型付きトランスポートエラー | ❌（[#169][up169]） | ❌ | — | ✅ 予定 |
 | ミドルウェア（retry/timeout/cancel） | ❌ | ❌ | — | ✅ 実装済み |
-| モック・非 Tauri フォールバック | ❌（[#197][up197]） | ❌ | — | ✅ 予定 |
+| モック・非 Tauri フォールバック | ❌（[#197][up197]） | ❌ | — | ✅ モックは実装済み・非 Tauri フォールバックは予定 |
 | `emitTo` | ❌（[#187][up187]） | ✅ | — | ✅ 実装済み |
 | AsyncIterable なチャネル | ❌ | ❌ | — | ✅ 実装済み |
 | raw `ipc::Request`/`Response` | ❌（[#170][up170]） | ❌ | — | ✅ 実装済み |
@@ -404,7 +423,7 @@ const api = createMockClient<AppCommands>({
 | L4 | イベント（`emitTo` を含む） ← 完了 |
 | L5 | AsyncIterable なチャネル ← 完了 |
 | L6 | raw IPC ← 完了 |
-| L7 | モックと非 Tauri フォールバック |
+| L7 | モック（`createMockClient` ← 完了）と非 Tauri フォールバック |
 | L8 | 実行時検証（Standard Schema・オプトイン） |
 | L9 | React / Vue 統合、examples |
 | L10 | 実戦検証済みの部分を `tauri-specta` へアップストリーム提案する（[#31][epic-l10]） |
