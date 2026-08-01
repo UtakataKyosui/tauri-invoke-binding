@@ -12,10 +12,14 @@
  * @packageDocumentation
  */
 
+export type { BinaryCommand } from './binary.js'
+export { toBlob, toUint8Array } from './binary.js'
 export type { InvokeFn, SafeInvokeFn } from './call.js'
 export { callCommand, callCommandSafe, NotInTauriError } from './call.js'
 export type { SnakeToCamel } from './casing.js'
 export { camelToSnake, snakeToCamel } from './casing.js'
+export type { ChannelOverflowPolicy, ChannelStreamOptions } from './channel.js'
+export { createChannel, invokeChannel } from './channel.js'
 export type { ClassifyContext } from './classify.js'
 export { classifyRejection } from './classify.js'
 export type {
@@ -48,8 +52,30 @@ export type {
   RetryOverride,
 } from './middleware/index.js'
 export { composeMiddleware, dedupe, logger, retry, timeout } from './middleware/index.js'
+export type {
+  CreateRawClientOptions,
+  RawBody,
+  RawCallOptions,
+  RawClient,
+  RawCommand,
+  RawCommandErr,
+  RawCommandMap,
+  RawCommandOk,
+  RawFlatClient,
+  RawInvokeFn,
+  RawSafeClient,
+  RawSafeInvokeFn,
+} from './raw.js'
+export { callRaw, callRawSafe, createRawClient } from './raw.js'
 export type { Result } from './result.js'
 export { err, isErr, isOk, ok } from './result.js'
+export type {
+  AdjacentlyTagged,
+  ExternallyTagged,
+  InternallyTagged,
+  TaggedHandlers,
+} from './tagged.js'
+export { matchAdjacentlyTagged, matchExternallyTagged, matchInternallyTagged } from './tagged.js'
 export type { SafeError, TransportError } from './transport-error.js'
 export { assertExhaustive } from './transport-error.js'
 
