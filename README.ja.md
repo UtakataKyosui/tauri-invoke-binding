@@ -94,20 +94,40 @@ type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E }
 を並べています。レイヤー記号の意味は [ロードマップ](#ロードマップ) を、進捗のライブチェックリスト
 は [Epic Issue][epic] を参照してください。
 
-| 穴 | 上流の根拠 | 本リポジトリでの先行実装 |
-| --- | --- | --- |
-| **トランスポートエラーが型に現れない。** 生成コードは `catch (e) { if (e instanceof Error) throw e; … }` としているため、引数のシリアライズ失敗・未登録コマンド・権限拒否・パニックは**型なしで throw** されます。`Result` を返さないコマンドに至っては安全な経路が一切ありません。 | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*（`ts-pattern` の網羅マッチが破れる） | **L2** — `TransportError` 判別ユニオン、生の reject 値を正規化する分類ロジック、絶対に throw しない `api.safe.*`、網羅性の型レベルテスト（Issue #9〜#12） |
-| **`emitTo` が使えない。** 生成される `makeEvent` は `listen` / `once` / `emit` のみ。 | [tauri-specta#187][up187] | **L4（完了）** — 型付き `emitTo` と 6 種の `EventTarget` 判別ユニオン（Issue #19） |
-| **`ipc::Request` / `ipc::Response` 非対応** — headers・raw body・`ArrayBuffer` 戻り値。 | [tauri-specta#170][up170]（*blocked on other work* ラベル） | **L6（完了）** — 型付き raw body リクエストと `ArrayBuffer` レスポンス（Issue #24〜#25） |
-| **ユニットテストの手段がない。** 生成物は `__TAURI_INVOKE` に直結した const アロー関数で差し替えにくく、非 Tauri 環境（ブラウザ・SSR・Storybook・vitest）のフォールバックもありません。 | [tauri-specta#197][up197] | **L7（#26 完了、#27 未実装）** — 型付きハンドラを登録できる `createMockClient` と非 Tauri 環境のフォールバック戦略（Issue #26〜#27） |
-| **コマンドが単一のフラットな名前空間。** | [tauri-specta#172][up172] | **L1** — フラットなコマンドマップの上に TS 側だけで名前空間を切る仕組み（Issue #8） |
-| **ミドルウェア層がない。** リトライ・タイムアウト・`AbortSignal` キャンセル・ロギング・インフライト重複排除は各アプリで手書きになります。生成コードの構造上、差し込み点が存在しません。 | 構造的な理由 | **L3** — ミドルウェアパイプラインと `timeout` / `retry` / キャンセル / `logger` / 重複排除（Issue #13〜#18） |
-| **チャネルが callback のみ。** `Channel<T>` は `onmessage` ベースで、`for await` にできず、完了・エラーの通知規約もありません。 | `Channel<T>` の API 形状 | **L5（完了）** — `AsyncIterable` 化したチャネルと tagged enum のナローイングヘルパー（Issue #22〜#23） |
-| **実行時検証がない。** 生成型はコンパイル時のみ。再生成を忘れると型と実データが静かに乖離します。 | 設計上の性質 | **L8** — Standard Schema によるオプトイン検証（Issue #28） |
-| **フレームワーク統合がない**（React hooks・Vue composables・TanStack Query）。 | 上流のスコープ外 | **L9** — 独自キャッシュ層を作らず TanStack Query に委ねる React hooks / Vue composables（Issue #29） |
+| 穴 | 上流の根拠 | 上流の状況（[2026-08-01 時点](#上流-issue-の状況)） | 本リポジトリでの先行実装 |
+| --- | --- | --- | --- |
+| **トランスポートエラーが型に現れない。** 生成コードは `catch (e) { if (e instanceof Error) throw e; … }` としているため、引数のシリアライズ失敗・未登録コマンド・権限拒否・パニックは**型なしで throw** されます。`Result` を返さないコマンドに至っては安全な経路が一切ありません。 | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*（`ts-pattern` の網羅マッチが破れる） | 🟡 Open、紐付く PR なし | **L2** — `TransportError` 判別ユニオン、生の reject 値を正規化する分類ロジック、絶対に throw しない `api.safe.*`、網羅性の型レベルテスト（Issue #9〜#12） |
+| **`emitTo` が使えない。** 生成される `makeEvent` は `listen` / `once` / `emit` のみ。 | [tauri-specta#187][up187] | 🟡 Open — [PR #249][pr249] が open（生成イベントバインディングに `emitTo` を追加、未マージ） | **L4（完了）** — 型付き `emitTo` と 6 種の `EventTarget` 判別ユニオン（Issue #19） |
+| **`ipc::Request` / `ipc::Response` 非対応** — headers・raw body・`ArrayBuffer` 戻り値。 | [tauri-specta#170][up170]（*blocked on other work* ラベル） | 🟡 Open、紐付く PR なし | **L6（完了）** — 型付き raw body リクエストと `ArrayBuffer` レスポンス（Issue #24〜#25） |
+| **ユニットテストの手段がない。** 生成物は `__TAURI_INVOKE` に直結した const アロー関数で差し替えにくく、非 Tauri 環境（ブラウザ・SSR・Storybook・vitest）のフォールバックもありません。 | [tauri-specta#197][up197] | 🟡 Open — [PR #248][pr248] が open（生成物のスナップショットテスト基盤を追加、未マージ） | **L7（#26 完了、#27 未実装）** — 型付きハンドラを登録できる `createMockClient` と非 Tauri 環境のフォールバック戦略（Issue #26〜#27） |
+| **コマンドが単一のフラットな名前空間。** | [tauri-specta#172][up172] | 🟡 Open、紐付く PR なし。Issue 自体が Tauri 本体側の対応が必要と述べている | **L1** — フラットなコマンドマップの上に TS 側だけで名前空間を切る仕組み（Issue #8） |
+| **ミドルウェア層がない。** リトライ・タイムアウト・`AbortSignal` キャンセル・ロギング・インフライト重複排除は各アプリで手書きになります。生成コードの構造上、差し込み点が存在しません。 | 構造的な理由 | — | **L3** — ミドルウェアパイプラインと `timeout` / `retry` / キャンセル / `logger` / 重複排除（Issue #13〜#18） |
+| **チャネルが callback のみ。** `Channel<T>` は `onmessage` ベースで、`for await` にできず、完了・エラーの通知規約もありません。 | `Channel<T>` の API 形状 | — | **L5（完了）** — `AsyncIterable` 化したチャネルと tagged enum のナローイングヘルパー（Issue #22〜#23） |
+| **実行時検証がない。** 生成型はコンパイル時のみ。再生成を忘れると型と実データが静かに乖離します。 | 設計上の性質 | — | **L8** — Standard Schema によるオプトイン検証（Issue #28） |
+| **フレームワーク統合がない**（React hooks・Vue composables・TanStack Query）。 | 上流のスコープ外 | — | **L9** — 独自キャッシュ層を作らず TanStack Query に委ねる React hooks / Vue composables（Issue #29） |
 
 右列はどれも型生成に手を入れる必要がありません。本パッケージが占めるのはこの空間です — この線引き
 の理由は [由来（Origin）](#由来origin) を参照してください。
+
+### 上流 Issue の状況
+
+`specta-rs/tauri-specta` を **2026-08-01** に直接確認しました。本プロジェクトが追跡している
+5 件の上流 Issue は、いずれも**まだ open** で、修正がマージされたものはありません。うち 2 件には
+**open（未マージ）の PR** が紐付いています。
+
+- [#169][up169]（トランスポートエラー） — open、紐付く PR なし。
+- [#170][up170]（`ipc::Request`/`Response`） — open、*blocked on other work* ラベル、紐付く PR なし。
+- [#172][up172]（モジュール名前空間付きコマンド） — open、紐付く PR なし。Issue 自体が Tauri
+  本体側の対応が必要と述べている。
+- [#187][up187]（`emitTo`） — open。メンテナが開いた [PR #249][pr249] が生成イベントバインディング
+  へ `emitTo` を追加する内容だが、まだマージされていない。
+- [#197][up197]（ユニットテスト） — open。[PR #248][pr248] が生成物のスナップショットテスト基盤を
+  追加する内容だが、まだマージされていない。
+
+いずれも本パッケージが埋めている穴を上流側で閉じてはいません。これらが上流でマージされた場合は、
+上の表と [ロードマップ](#ロードマップ) を更新します。[由来（Origin）](#由来origin) の方針どおり、
+該当箇所は本パッケージのスコープを書き換える理由ではなく、上流の修正を優先して本パッケージ側を
+畳む候補として扱います。
 
 ## 立ち位置
 
@@ -456,6 +476,8 @@ pnpm add tauri-invoke-binding   # リリース後
 [up172]: https://github.com/specta-rs/tauri-specta/issues/172
 [up187]: https://github.com/specta-rs/tauri-specta/issues/187
 [up197]: https://github.com/specta-rs/tauri-specta/issues/197
+[pr249]: https://github.com/specta-rs/tauri-specta/pull/249
+[pr248]: https://github.com/specta-rs/tauri-specta/pull/248
 [epic]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/1
 [epic-l10]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/31
 [i13]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/13
