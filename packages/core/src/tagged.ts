@@ -28,6 +28,31 @@ export type TaggedHandlers<Variants extends Record<string, unknown>, R> = {
 }
 
 /**
+ * Resolves the handler for `variant`, or fails with a message naming it.
+ *
+ * The handler map is exhaustive by construction at compile time, so this can
+ * only trigger when the *value* disagrees with the type — in practice a Rust
+ * binary rebuilt with a new enum variant against TypeScript that was compiled
+ * before it existed. That is exactly the moment a clear message matters, and
+ * the bare `handlers[key](payload)` it replaces would have failed with
+ * `handler is not a function`, naming neither the variant nor the cause.
+ */
+function resolveHandler<Variants extends Record<string, unknown>, R>(
+  handlers: TaggedHandlers<Variants, R>,
+  variant: PropertyKey,
+): (payload: unknown) => R {
+  const handler = handlers[variant as keyof Variants] as ((payload: unknown) => R) | undefined
+  if (typeof handler !== 'function') {
+    throw new Error(
+      `tauri-invoke-binding: no handler for tagged-enum variant "${String(variant)}". ` +
+        `Known variants: ${Object.keys(handlers).join(', ') || '(none)'}. ` +
+        'This usually means the Rust enum gained a variant since these bindings were compiled.',
+    )
+  }
+  return handler
+}
+
+/**
  * Builds the TS union `serde`'s **externally tagged** (default)
  * representation produces from a `Variants` record: a unit variant
  * (`Variants[K]` is `undefined`) serializes to the bare variant name; any
@@ -78,12 +103,10 @@ export function matchExternallyTagged<Variants extends Record<string, unknown>, 
   handlers: TaggedHandlers<Variants, R>,
 ): R {
   if (typeof value === 'string') {
-    const handler = handlers[value as keyof Variants] as (payload: unknown) => R
-    return handler(undefined)
+    return resolveHandler(handlers, value)(undefined)
   }
-  const key = Object.keys(value as object)[0] as keyof Variants
-  const handler = handlers[key] as (payload: unknown) => R
-  return handler((value as Record<string, unknown>)[key as string])
+  const key = Object.keys(value as object)[0] as string
+  return resolveHandler(handlers, key)((value as Record<string, unknown>)[key])
 }
 
 /**
@@ -97,9 +120,8 @@ export function matchInternallyTagged<
   Variants extends Record<string, unknown>,
   R,
 >(tag: Tag, value: InternallyTagged<Tag, Variants>, handlers: TaggedHandlers<Variants, R>): R {
-  const key = (value as Record<string, unknown>)[tag] as keyof Variants
-  const handler = handlers[key] as (payload: unknown) => R
-  return handler(value)
+  const key = (value as Record<string, unknown>)[tag] as PropertyKey
+  return resolveHandler(handlers, key)(value)
 }
 
 /**
@@ -118,7 +140,6 @@ export function matchAdjacentlyTagged<
   value: AdjacentlyTagged<Tag, Content, Variants>,
   handlers: TaggedHandlers<Variants, R>,
 ): R {
-  const key = (value as Record<string, unknown>)[tag] as keyof Variants
-  const handler = handlers[key] as (payload: unknown) => R
-  return handler((value as Record<string, unknown>)[content])
+  const key = (value as Record<string, unknown>)[tag] as PropertyKey
+  return resolveHandler(handlers, key)((value as Record<string, unknown>)[content])
 }

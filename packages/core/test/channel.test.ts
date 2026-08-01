@@ -136,14 +136,15 @@ describe('createChannel backpressure (issue #22)', () => {
 })
 
 describe('createChannel + AbortSignal (issue #22)', () => {
-  it('ends the stream with an error when the signal fires, after any already-buffered message', async () => {
+  it('ends the stream with an error when the signal fires, discarding buffered messages', async () => {
     const fake = fakeChannel<number>()
     const ac = new AbortController()
     const { stream } = createChannel<number>({ signal: ac.signal })
     fake.emit(1)
     ac.abort()
     const iterator = stream[Symbol.asyncIterator]()
-    await expect(iterator.next()).resolves.toEqual({ value: 1, done: false })
+    // An abort means "stop now" — buffered-but-unconsumed messages are
+    // dropped rather than delivered, matching `raceAbort` in internal/abort.ts.
     await expect(iterator.next()).rejects.toThrow(/aborted/i)
   })
 

@@ -326,6 +326,14 @@ Backpressure is bounded by `highWaterMark` (default 1024); what happens past the
 `overflow: 'error' | 'drop-oldest' | 'drop-newest'` (default `'error'`). Callback-style
 consumption (`channel.onmessage = ...`) still works — `for await` is additive, not required.
 
+Termination rules: the first terminal condition wins, so a command rejection arriving after
+an abort cannot replace the abort as the reason the stream ended. Passing `signal` and
+aborting **discards** anything still buffered (you asked to stop *now* — the same rule
+`AbortSignal` follows everywhere else in this package); every other ending — a command
+rejection, a buffer overflow — **drains** what already arrived before surfacing the error,
+since those messages genuinely came off the wire. Breaking out of the loop ends the stream
+and releases both the buffer and the signal listener.
+
 A narrowing helper for Rust tagged enums (`Started` / `Progress` / `Finished`-shaped) ships
 alongside it (issue #23), covering all three `serde` representations:
 

@@ -315,6 +315,13 @@ for await (const ev of invokeChannel<DownloadEvent>((channel) =>
 `overflow: 'error' | 'drop-oldest' | 'drop-newest'`（既定 `'error'`）で選べる。callback 形式
 （`channel.onmessage = ...`）もそのまま使える — `for await` は強制されない。
 
+終了の規約：**最初に確定した終了理由が優先される**ので、abort の後に届いたコマンドの reject が
+abort を上書きすることはない。`signal` による abort はバッファに残っているメッセージを
+**破棄**する（「いま止めたい」という意思表示であり、本パッケージの他の箇所での `AbortSignal`
+の扱いと一致する）。それ以外の終了 — コマンドの reject、バッファ超過 — は、すでに届いていた
+メッセージを**流し切ってから**エラーを投げる（実際にワイヤーから届いた値を捨てないため）。
+ループを `break` すると、ストリームは終了しバッファと signal のリスナが解放される。
+
 tagged enum（`Started` / `Progress` / `Finished` のような Rust の enum）を `switch` なしで
 narrowing するヘルパりも同梱（Issue #23）。serde の 3 表現すべてに対応：
 
