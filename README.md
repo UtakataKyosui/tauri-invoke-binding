@@ -12,10 +12,13 @@
 > too: `invokeChannel` / `createChannel` consume `Channel<T>` as `for await`-able streams
 > (with backpressure), a narrowing helper covers all three `serde` tagged-enum
 > representations, `createRawClient` gives typed raw-body requests, and `BinaryCommand`
-> types commands returning `ArrayBuffer`. Everything past that — mocking, runtime
-> validation, framework integrations — is still a design sketch, not shipped code; each
-> such example below says so. Feedback on the design, implemented or sketched, is exactly
-> what is wanted right now.
+> types commands returning `ArrayBuffer`. Testing (L7, `tauri-invoke-binding/testing`) is
+> implemented too: `createMockClient` gives typed handler registration off your
+> `CommandMap`, `mockTransportError` injects any `TransportError` kind, call history is
+> recorded, and the whole thing runs in plain vitest with no Tauri webview. Everything past
+> that — the non-Tauri fallback, runtime validation, framework integrations — is still a
+> design sketch, not shipped code; each such example below says so. Feedback on the design,
+> implemented or sketched, is exactly what is wanted right now.
 
 **日本語版: [README.ja.md](./README.ja.md)**
 
@@ -101,7 +104,7 @@ and the [Epic issue][epic] for the live checklist.
 | **Transport errors are absent from the types.** Generated code does `catch (e) { if (e instanceof Error) throw e; … }`, so argument-serialization failures, unregistered commands, denied permissions and panics **throw untyped**. Commands that don't return `Result` have no safe path at all. | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*, breaking exhaustive `ts-pattern` matching | **L2** — a `TransportError` discriminated union, a classifier that normalizes raw rejections into it, a `api.safe.*` call site that never throws, and exhaustiveness type tests (issues #9–#12) |
 | **`emitTo` is unavailable.** The generated `makeEvent` exposes `listen` / `once` / `emit` only. | [tauri-specta#187][up187] | **L4 (done)** — typed `emitTo` plus the 6-way `EventTarget` union (issue #19) |
 | **`ipc::Request` / `ipc::Response` unsupported** — headers, raw bodies, `ArrayBuffer` responses. | [tauri-specta#170][up170] (labelled *blocked on other work*) | **L6 (done)** — typed raw-body requests and `ArrayBuffer` responses (issues #24–#25) |
-| **No unit-testing story.** Generated commands are const arrow functions bound directly to `__TAURI_INVOKE`, awkward to stub. No fallback for non-Tauri contexts (browser, SSR, Storybook, vitest). | [tauri-specta#197][up197] | **L7** — `createMockClient` with typed handlers, plus a non-Tauri fallback strategy (issues #26–#27) |
+| **No unit-testing story.** Generated commands are const arrow functions bound directly to `__TAURI_INVOKE`, awkward to stub. No fallback for non-Tauri contexts (browser, SSR, Storybook, vitest). | [tauri-specta#197][up197] | **L7 (#26 done, #27 not yet)** — `createMockClient` with typed handlers, plus a non-Tauri fallback strategy (issues #26–#27) |
 | **Commands live in one flat namespace.** | [tauri-specta#172][up172] | **L1** — TS-side module namespacing on top of the flat command map (issue #8) |
 | **No middleware layer.** Retry, timeout, `AbortSignal` cancellation, logging and in-flight deduplication are hand-rolled per app — the generated code offers no seam to hook into. | structural | **L3** — a middleware pipeline plus `timeout` / `retry` / cancellation / `logger` / dedupe (issues #13–#18) |
 | **Channels are callback-only.** `Channel<T>` drives `onmessage`; no `for await`, no completion or error convention. | `Channel<T>` API shape | **L5 (done)** — `AsyncIterable` channels and a tagged-enum narrowing helper (issues #22–#23) |
@@ -373,15 +376,30 @@ const buffer = await api.readFile({ path: '/tmp/x' }) // buffer: ArrayBuffer
 const blob = toBlob(buffer, 'application/octet-stream')
 ```
 
-### 5. Testing (not implemented yet — L7, upstream gap [#197][up197])
+### 5. Testing (`createMockClient` implemented — L7, issue #26, upstream gap [#197][up197])
+
+An independent mock client, typed off your `CommandMap`. It does not wrap `@tauri-apps/api/mocks`'
+`mockIPC` — this replaces the `invoke()` call itself, one layer above `window.__TAURI_INTERNALS__`:
 
 ```ts
 import { createMockClient } from 'tauri-invoke-binding/testing'
 
 const api = createMockClient<AppCommands>({
-  helloWorld: ({ myName }) => `hi ${myName}`,
+  hello_world: ({ myName }) => `hi ${myName}`,
+  has_error: () => ({ status: 'error', error: 42 }), // the command's own declared Err
 })
+
+await api.helloWorld({ myName: 'Tauri' }) // -> 'hi Tauri'
+await api.safe.hasError() // -> { status: 'error', error: { kind: 'command', value: 42 } }
+api.__mock.calls // call history
 ```
+
+`mockTransportError` injects any `TransportError` `kind` on demand (for testing error-handling
+paths). What happens for an unregistered command is a choice: `unknownCommand: 'throw' |
+'command-not-found'`. The whole surface is testable from plain vitest, no Tauri webview required.
+
+The non-Tauri fallback strategy (browser/SSR/Storybook) is the rest of L7, **not implemented yet
+— issue #27**.
 
 ## How it compares
 
@@ -391,7 +409,7 @@ const api = createMockClient<AppCommands>({
 | Requires Rust-side changes | proc-macro | trait macros | derive | **none** |
 | Typed transport errors | ❌ ([#169][up169]) | ❌ | n/a | ✅ planned |
 | Middleware (retry/timeout/cancel) | ❌ | ❌ | n/a | ✅ implemented |
-| Mocking / non-Tauri fallback | ❌ ([#197][up197]) | ❌ | n/a | ✅ planned |
+| Mocking / non-Tauri fallback | ❌ ([#197][up197]) | ❌ | n/a | ✅ mocking implemented, fallback planned |
 | `emitTo` | ❌ ([#187][up187]) | ✅ | n/a | ✅ implemented |
 | Async-iterable channels | ❌ | ❌ | n/a | ✅ implemented |
 | Raw `ipc::Request`/`Response` | ❌ ([#170][up170]) | ❌ | n/a | ✅ implemented |
@@ -416,7 +434,7 @@ Tracked in the [Epic issue][epic]. Broadly:
 | L4 | Events, incl. `emitTo` ← done |
 | L5 | Async-iterable channels ← done |
 | L6 | Raw IPC ← done |
-| L7 | Mocking and non-Tauri fallback |
+| L7 | Mocking (`createMockClient` ← done) and non-Tauri fallback |
 | L8 | Opt-in runtime validation (Standard Schema) |
 | L9 | React / Vue integration, examples |
 | L10 | Propose upstreaming proven pieces into `tauri-specta` ([#31][epic-l10]) |

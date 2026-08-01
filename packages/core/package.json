@@ -40,6 +40,11 @@
       "import": "./dist/events.js",
       "require": "./dist/events.cjs"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "require": "./dist/testing.cjs"
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
