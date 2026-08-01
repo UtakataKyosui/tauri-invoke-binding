@@ -99,20 +99,40 @@ evidence (mostly an open issue, checkable independently of this README) and the 
 implementation planned here to close it — see [Roadmap](#roadmap) for what the layer codes mean,
 and the [Epic issue][epic] for the live checklist.
 
-| Gap | Upstream evidence | Preemptive implementation here |
-| --- | --- | --- |
-| **Transport errors are absent from the types.** Generated code does `catch (e) { if (e instanceof Error) throw e; … }`, so argument-serialization failures, unregistered commands, denied permissions and panics **throw untyped**. Commands that don't return `Result` have no safe path at all. | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*, breaking exhaustive `ts-pattern` matching | **L2** — a `TransportError` discriminated union, a classifier that normalizes raw rejections into it, a `api.safe.*` call site that never throws, and exhaustiveness type tests (issues #9–#12) |
-| **`emitTo` is unavailable.** The generated `makeEvent` exposes `listen` / `once` / `emit` only. | [tauri-specta#187][up187] | **L4 (done)** — typed `emitTo` plus the 6-way `EventTarget` union (issue #19) |
-| **`ipc::Request` / `ipc::Response` unsupported** — headers, raw bodies, `ArrayBuffer` responses. | [tauri-specta#170][up170] (labelled *blocked on other work*) | **L6 (done)** — typed raw-body requests and `ArrayBuffer` responses (issues #24–#25) |
-| **No unit-testing story.** Generated commands are const arrow functions bound directly to `__TAURI_INVOKE`, awkward to stub. No fallback for non-Tauri contexts (browser, SSR, Storybook, vitest). | [tauri-specta#197][up197] | **L7 (#26 done, #27 not yet)** — `createMockClient` with typed handlers, plus a non-Tauri fallback strategy (issues #26–#27) |
-| **Commands live in one flat namespace.** | [tauri-specta#172][up172] | **L1** — TS-side module namespacing on top of the flat command map (issue #8) |
-| **No middleware layer.** Retry, timeout, `AbortSignal` cancellation, logging and in-flight deduplication are hand-rolled per app — the generated code offers no seam to hook into. | structural | **L3** — a middleware pipeline plus `timeout` / `retry` / cancellation / `logger` / dedupe (issues #13–#18) |
-| **Channels are callback-only.** `Channel<T>` drives `onmessage`; no `for await`, no completion or error convention. | `Channel<T>` API shape | **L5 (done)** — `AsyncIterable` channels and a tagged-enum narrowing helper (issues #22–#23) |
-| **No runtime validation.** Generated types are compile-time only, so a forgotten regeneration silently drifts from reality. | by design | **L8** — opt-in Standard Schema validation (issue #28) |
-| **No framework integration** (React hooks, Vue composables, TanStack Query). | out of scope upstream | **L9** — React hooks / Vue composables, backed by TanStack Query rather than a bespoke cache (issue #29) |
+| Gap | Upstream evidence | Upstream status ([as of 2026-08-01](#upstream-issue-status)) | Preemptive implementation here |
+| --- | --- | --- | --- |
+| **Transport errors are absent from the types.** Generated code does `catch (e) { if (e instanceof Error) throw e; … }`, so argument-serialization failures, unregistered commands, denied permissions and panics **throw untyped**. Commands that don't return `Result` have no safe path at all. | [tauri-specta#169][up169] — *"The result was a transport error, which wasn't represented in the types at all"*, breaking exhaustive `ts-pattern` matching | 🟡 Open, no linked PR | **L2** — a `TransportError` discriminated union, a classifier that normalizes raw rejections into it, a `api.safe.*` call site that never throws, and exhaustiveness type tests (issues #9–#12) |
+| **`emitTo` is unavailable.** The generated `makeEvent` exposes `listen` / `once` / `emit` only. | [tauri-specta#187][up187] | 🟡 Open — [PR #249][pr249] open (adds `emitTo` to generated bindings) | **L4 (done)** — typed `emitTo` plus the 6-way `EventTarget` union (issue #19) |
+| **`ipc::Request` / `ipc::Response` unsupported** — headers, raw bodies, `ArrayBuffer` responses. | [tauri-specta#170][up170] (labelled *blocked on other work*) | 🟡 Open, no linked PR | **L6 (done)** — typed raw-body requests and `ArrayBuffer` responses (issues #24–#25) |
+| **No unit-testing story.** Generated commands are const arrow functions bound directly to `__TAURI_INVOKE`, awkward to stub. No fallback for non-Tauri contexts (browser, SSR, Storybook, vitest). | [tauri-specta#197][up197] | 🟡 Open — [PR #248][pr248] open (snapshot-testing harness for generated output) | **L7 (#26 done, #27 not yet)** — `createMockClient` with typed handlers, plus a non-Tauri fallback strategy (issues #26–#27) |
+| **Commands live in one flat namespace.** | [tauri-specta#172][up172] | 🟡 Open, no linked PR | **L1** — TS-side module namespacing on top of the flat command map (issue #8) |
+| **No middleware layer.** Retry, timeout, `AbortSignal` cancellation, logging and in-flight deduplication are hand-rolled per app — the generated code offers no seam to hook into. | structural | — | **L3** — a middleware pipeline plus `timeout` / `retry` / cancellation / `logger` / dedupe (issues #13–#18) |
+| **Channels are callback-only.** `Channel<T>` drives `onmessage`; no `for await`, no completion or error convention. | `Channel<T>` API shape | — | **L5 (done)** — `AsyncIterable` channels and a tagged-enum narrowing helper (issues #22–#23) |
+| **No runtime validation.** Generated types are compile-time only, so a forgotten regeneration silently drifts from reality. | by design | — | **L8** — opt-in Standard Schema validation (issue #28) |
+| **No framework integration** (React hooks, Vue composables, TanStack Query). | out of scope upstream | — | **L9** — React hooks / Vue composables, backed by TanStack Query rather than a bespoke cache (issue #29) |
 
 None of the right-hand column requires touching type generation. That is the space this package
 occupies — see [Origin](#origin) for why that boundary is drawn where it is.
+
+### Upstream issue status
+
+Checked directly against `specta-rs/tauri-specta` on **2026-08-01**. All five upstream issues
+this project tracks are still **open**; none have merged a fix yet. Two have an **open, unmerged**
+PR against them:
+
+- [#169][up169] (transport errors) — open, no linked PR.
+- [#170][up170] (`ipc::Request`/`Response`) — open, labelled *blocked on other work*, no linked PR.
+- [#172][up172] (module-namespaced commands) — open, no linked PR; the issue itself notes it needs
+  work in Tauri itself.
+- [#187][up187] (`emitTo`) — open; [PR #249][pr249] (opened by a maintainer) adds `emitTo` to
+  generated event bindings but has not merged.
+- [#197][up197] (unit testing) — open; [PR #248][pr248] adds a snapshot-testing harness for
+  generated output but has not merged.
+
+Nothing here has closed the gap this package fills yet — if any of these merge upstream, the
+corresponding row above and the [Roadmap](#roadmap) will be updated, and (per [Origin](#origin))
+the matching piece here becomes a candidate to retire in favor of the upstream fix rather than a
+justification to rewrite this package's scope.
 
 ## Positioning
 
@@ -467,6 +487,8 @@ worth more than code.
 [up172]: https://github.com/specta-rs/tauri-specta/issues/172
 [up187]: https://github.com/specta-rs/tauri-specta/issues/187
 [up197]: https://github.com/specta-rs/tauri-specta/issues/197
+[pr249]: https://github.com/specta-rs/tauri-specta/pull/249
+[pr248]: https://github.com/specta-rs/tauri-specta/pull/248
 [epic]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/1
 [epic-l10]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/31
 [i13]: https://github.com/UtakataKyosui/tauri-invoke-binding/issues/13
